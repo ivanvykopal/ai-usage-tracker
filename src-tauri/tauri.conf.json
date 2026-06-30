@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ai-usage-overlay",
+  "version": "0.1.0",
+  "identifier": "com.ai-usage-overlay.app",
+  "build": {
+    "beforeDevCommand": "",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "overlay",
+        "title": "AI Assistants",
+        "width": 320,
+        "height": 260,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": true,
+        "x": 24,
+        "y": 24
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "trayIcon": {
+      "id": "main",
+      "tooltip": "AI Assistant Usage",
+      "iconAsRgba": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
