@@ -1,3 +1,4 @@
+pub mod claude;
 pub mod collector;
 pub mod config;
 pub mod model;

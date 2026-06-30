@@ -52,16 +52,22 @@ pub fn snapshot() -> ProcessSnapshot {
     }
 }
 
-/// True if any descendant of `pid` has CPU > 5%.
-pub fn has_active_descendant(pid: u32, snap: &ProcessSnapshot) -> bool {
-    let mut stack: Vec<u32> = snap.children.get(&pid).cloned().unwrap_or_default();
+/// True if any descendant of `pid` has CPU > 5%. Takes the process and
+/// children maps directly (both held by `ProcessContext` and
+/// `ProcessSnapshot`) so it can be called from either.
+pub fn has_active_descendant(
+    pid: u32,
+    procs: &HashMap<u32, ProcInfo>,
+    children: &HashMap<u32, Vec<u32>>,
+) -> bool {
+    let mut stack: Vec<u32> = children.get(&pid).cloned().unwrap_or_default();
     while let Some(c) = stack.pop() {
-        if let Some(info) = snap.procs.get(&c) {
+        if let Some(info) = procs.get(&c) {
             if info.cpu > 5.0 {
                 return true;
             }
         }
-        if let Some(grandkids) = snap.children.get(&c) {
+        if let Some(grandkids) = children.get(&c) {
             stack.extend(grandkids);
         }
     }

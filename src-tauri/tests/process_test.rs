@@ -19,5 +19,5 @@ fn snapshot_includes_self_and_has_no_panics() {
 #[test]
 fn has_active_descendant_returns_bool_without_panic() {
     let snap = snapshot();
-    let _ = has_active_descendant(std::process::id(), &snap);
+    let _ = has_active_descendant(std::process::id(), &snap.procs, &snap.children);
 }
