@@ -21,9 +21,17 @@ struct CodexState {
     session_id: String,
     cwd: String,
     model: String,
+    started_at: i64,
     total_input: u64,
     total_output: u64,
     total_cache_read: u64,
+    /// Input tokens actually in context for the most recent turn (from
+    /// `last_token_usage`) — this is what Codex's own statusline shows
+    /// context usage against, not the session's cumulative totals.
+    last_context_tokens: u64,
+    /// Model's context window size in tokens, as reported by Codex itself
+    /// (`model_context_window`) rather than guessed from the model name.
+    context_window: u64,
     /// True once a "user_message" event arrives and stays true until the
     /// model visibly responds (agent_message/function_call/task_complete) —
     /// mirrors abtop's `model_generating` flag, drives the Thinking status.
@@ -130,14 +138,21 @@ impl Collector for CodexCollector {
                     session_id: st.session_id.clone(),
                     cwd: st.cwd.clone(),
                     project_name,
-                    started_at: 0,
+                    started_at: st.started_at,
                     status,
                     model: st.model.clone(),
-                    context_percent: crate::collector::context_percent_for(
-                        &st.model,
-                        "",
-                        st.total_input + st.total_cache_read,
-                    ),
+                    // Codex reports its own context-window size and per-turn
+                    // usage in the transcript, so use those directly instead
+                    // of guessing a window from the model name and dividing
+                    // by cumulative session totals (which overstates usage
+                    // more with every turn and never matches Codex's own
+                    // statusline).
+                    context_percent: if st.context_window > 0 {
+                        ((st.last_context_tokens as f64 / st.context_window as f64) * 100.0)
+                            .clamp(0.0, 100.0)
+                    } else {
+                        crate::collector::context_percent_for(&st.model, "", st.last_context_tokens)
+                    },
                     total_input_tokens: st.total_input,
                     total_output_tokens: st.total_output,
                     total_cache_read: st.total_cache_read,
@@ -164,21 +179,46 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
     let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
     match ty {
         "session_meta" => {
-            st.session_id = v
-                .get("session_id")
+            // Codex nests session fields under `payload`, matching event_msg/
+            // response_item/turn_context — fall back to top-level for safety.
+            let payload = v.get("payload").unwrap_or(&v);
+            st.session_id = payload
+                .get("id")
+                .or_else(|| payload.get("session_id"))
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_string();
-            st.cwd = v
+            st.cwd = payload
                 .get("cwd")
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_string();
-            st.model = v
-                .get("model")
+            // Real Codex rollouts don't carry `model` on session_meta (it's
+            // reported via turn_context below); some fixtures/older formats
+            // do, so take it here as a fallback that turn_context overrides.
+            if let Some(m) = payload.get("model").and_then(|s| s.as_str()) {
+                st.model = m.to_string();
+            }
+            if let Some(ts) = payload
+                .get("timestamp")
                 .and_then(|s| s.as_str())
-                .unwrap_or("")
-                .to_string();
+                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+            {
+                st.started_at = ts.timestamp_millis();
+            }
+        }
+        "turn_context" => {
+            // The model actually in use is only reported here — session_meta
+            // doesn't carry it. Codex lets users switch models/effort mid
+            // session, so always take the latest value.
+            if let Some(payload) = v.get("payload") {
+                if let Some(m) = payload.get("model").and_then(|s| s.as_str()) {
+                    st.model = m.to_string();
+                }
+                if let Some(cw) = payload.get("model_context_window").and_then(|v| v.as_u64()) {
+                    st.context_window = cw;
+                }
+            }
         }
         "event_msg" => {
             let Some(payload) = v.get("payload") else {
@@ -205,6 +245,16 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
                     st.total_input = input.saturating_sub(cache);
                     st.total_output = output;
                     st.total_cache_read = cache;
+
+                    // The current-turn context size Codex's own statusline
+                    // uses — not the cumulative session totals above.
+                    let last = &payload["info"]["last_token_usage"];
+                    if let Some(inp) = last["input_tokens"].as_u64() {
+                        st.last_context_tokens = inp;
+                    }
+                    if let Some(cw) = payload["info"]["model_context_window"].as_u64() {
+                        st.context_window = cw;
+                    }
 
                     let rl = &payload["rate_limits"];
                     if rl.is_object() && is_account_level_codex_rate_limit(rl) {
@@ -243,6 +293,9 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
                 }
                 "task_started" => {
                     st.task_complete = false;
+                    if let Some(cw) = payload["model_context_window"].as_u64() {
+                        st.context_window = cw;
+                    }
                 }
                 _ => {}
             }
@@ -260,7 +313,16 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
                             .and_then(|n| n.as_str())
                             .unwrap_or("")
                             .to_string();
-                        st.current_task = name.clone();
+                        let arg = payload
+                            .get("arguments")
+                            .and_then(|a| a.as_str())
+                            .map(parse_codex_tool_arg)
+                            .unwrap_or_default();
+                        st.current_task = if arg.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{} {}", name, arg)
+                        };
                         st.pending_calls.insert(call_id.to_string(), name);
                     }
                 }
@@ -279,6 +341,46 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
         }
         _ => {}
     }
+}
+
+/// Pull a short, human-readable argument out of a function_call's JSON
+/// arguments string — the file path for read/write-style tools, or the
+/// command for shell-style tools — so `current_task` reads like
+/// "shell git status" instead of just "shell".
+fn parse_codex_tool_arg(arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(arguments) else {
+        return String::new();
+    };
+
+    for key in ["file_path", "path"] {
+        if let Some(raw) = value.get(key).and_then(|v| v.as_str()) {
+            let short = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
+            return truncate_arg(short);
+        }
+    }
+
+    for key in ["cmd", "command"] {
+        if let Some(v) = value.get(key) {
+            if let Some(s) = v.as_str() {
+                return truncate_arg(s);
+            }
+            if let Some(items) = v.as_array() {
+                let parts: Vec<&str> = items.iter().filter_map(|i| i.as_str()).collect();
+                if parts.len() >= 3 && parts[0] == "bash" && parts[1] == "-lc" {
+                    return truncate_arg(parts[2]);
+                }
+                if !parts.is_empty() {
+                    return truncate_arg(&parts.join(" "));
+                }
+            }
+        }
+    }
+
+    String::new()
+}
+
+fn truncate_arg(arg: &str) -> String {
+    arg.chars().take(120).collect()
 }
 
 /// Codex emits per-project as well as account-level rate-limit snapshots;
