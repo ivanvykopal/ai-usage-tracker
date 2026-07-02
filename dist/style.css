@@ -27,6 +27,7 @@ body { -webkit-user-select: none; user-select: none; }
 .row { padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .head { display: flex; align-items: center; gap: 6px; }
 .agent { font-weight: 600; }
+.model { font-size: 10px; opacity: 0.55; padding: 1px 5px; border-radius: 8px; background: rgba(255,255,255,0.08); white-space: nowrap; }
 .proj { opacity: 0.6; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status { font-size: 10px; padding: 1px 5px; border-radius: 8px; background: rgba(255,255,255,0.1); }
 .status-executing { background: rgba(80,200,120,0.25); }

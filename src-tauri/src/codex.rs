@@ -133,7 +133,11 @@ impl Collector for CodexCollector {
                     started_at: 0,
                     status,
                     model: st.model.clone(),
-                    context_percent: 0.0,
+                    context_percent: crate::collector::context_percent_for(
+                        &st.model,
+                        "",
+                        st.total_input + st.total_cache_read,
+                    ),
                     total_input_tokens: st.total_input,
                     total_output_tokens: st.total_output,
                     total_cache_read: st.total_cache_read,

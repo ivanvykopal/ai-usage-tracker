@@ -95,8 +95,12 @@ impl Collector for HermesCollector {
                 project_name,
                 started_at: (active.started_at * 1000.0) as i64,
                 status: self.status,
+                context_percent: crate::collector::context_percent_for(
+                    &active.model,
+                    "",
+                    active.input_tokens + active.cache_read_tokens,
+                ),
                 model: active.model,
-                context_percent: 0.0,
                 total_input_tokens: active.input_tokens,
                 total_output_tokens: active.output_tokens,
                 total_cache_read: active.cache_read_tokens,

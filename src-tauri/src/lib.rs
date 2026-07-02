@@ -56,16 +56,29 @@ fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// A resolved home directory plus which WSL distro it came from, if any.
+/// `wsl_distro` is `None` for the native host's own home directory; it's
+/// `Some(name)` for a home directory reached through `\\wsl$\<name>\...` on
+/// native Windows. Collectors use this to know when a session's pid must be
+/// checked against that distro's own process list instead of the host's.
+struct HomeDir {
+    path: PathBuf,
+    wsl_distro: Option<String>,
+}
+
 /// Resolve all possible home directories for agent data.
 /// In WSL, this includes both the WSL home and the Windows home (via /mnt/c).
 /// On Windows, this includes both the Windows home and WSL homes (via wsl.exe).
 /// This allows detecting Claude/Codex/Hermes sessions running in either environment.
-fn resolve_home_dirs() -> Vec<PathBuf> {
+fn resolve_home_dirs() -> Vec<HomeDir> {
     let mut dirs = Vec::new();
 
     // Always add the primary home directory (platform-specific)
     if let Some(home) = dirs::home_dir() {
-        dirs.push(home.clone());
+        dirs.push(HomeDir {
+            path: home,
+            wsl_distro: None,
+        });
     }
 
     // Check if we're in WSL
@@ -81,8 +94,11 @@ fn resolve_home_dirs() -> Vec<PathBuf> {
             .or_else(|| std::env::var("LOGNAME").ok())
         {
             let windows_home = PathBuf::from("/mnt/c").join("Users").join(&username);
-            if windows_home.exists() && !dirs.contains(&windows_home) {
-                dirs.push(windows_home);
+            if windows_home.exists() && !dirs.iter().any(|h: &HomeDir| h.path == windows_home) {
+                dirs.push(HomeDir {
+                    path: windows_home,
+                    wsl_distro: None,
+                });
             }
         }
     } else {
@@ -92,9 +108,11 @@ fn resolve_home_dirs() -> Vec<PathBuf> {
             .args(["-l", "-q"])
             .output()
         {
-            let wsl_distributions = String::from_utf8_lossy(&output.stdout);
+            let wsl_distributions = process::decode_wsl_output(&output.stdout);
             for dist in wsl_distributions.lines() {
-                let dist = dist.trim();
+                // wsl -l -q can emit a UTF-16 BOM as the first character of
+                // the first line even after decoding; strip it defensively.
+                let dist = dist.trim().trim_start_matches('\u{feff}');
                 if dist.is_empty() {
                     continue;
                 }
@@ -104,7 +122,7 @@ fn resolve_home_dirs() -> Vec<PathBuf> {
                     .args(["-d", dist, "sh", "-c", "echo $HOME"])
                     .output()
                 {
-                    let home_path = String::from_utf8_lossy(&user_output.stdout)
+                    let home_path = process::decode_wsl_output(&user_output.stdout)
                         .trim()
                         .to_string();
                     // Convert WSL path like /home/username to Windows path
@@ -113,8 +131,13 @@ fn resolve_home_dirs() -> Vec<PathBuf> {
                             .join(dist)
                             .join("home")
                             .join(username);
-                        if windows_wsl_home.exists() && !dirs.contains(&windows_wsl_home) {
-                            dirs.push(windows_wsl_home);
+                        if windows_wsl_home.exists()
+                            && !dirs.iter().any(|h: &HomeDir| h.path == windows_wsl_home)
+                        {
+                            dirs.push(HomeDir {
+                                path: windows_wsl_home,
+                                wsl_distro: Some(dist.to_string()),
+                            });
                         }
                     }
                 }
@@ -125,16 +148,18 @@ fn resolve_home_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn build_collectors(cfg: &config::Config) -> Vec<Box<dyn collector::Collector>> {
-    let home_dirs = resolve_home_dirs();
+fn build_collectors(cfg: &config::Config, home_dirs: &[HomeDir]) -> Vec<Box<dyn collector::Collector>> {
     let mut v: Vec<Box<dyn collector::Collector>> = Vec::new();
 
     if cfg.enabled_agents.iter().any(|a| a == "claude") {
         // Create a collector that checks all possible .claude directories
-        let claude_dirs: Vec<PathBuf> = home_dirs
+        let claude_dirs: Vec<claude::ConfigDirEntry> = home_dirs
             .iter()
-            .map(|h| h.join(".claude"))
-            .filter(|p| p.exists())
+            .map(|h| claude::ConfigDirEntry {
+                dir: h.path.join(".claude"),
+                wsl_distro: h.wsl_distro.clone(),
+            })
+            .filter(|e| e.dir.exists())
             .collect();
         v.push(Box::new(claude::ClaudeCollector::new_multi(claude_dirs)));
     }
@@ -142,7 +167,7 @@ fn build_collectors(cfg: &config::Config) -> Vec<Box<dyn collector::Collector>> 
     if cfg.enabled_agents.iter().any(|a| a == "codex") {
         let codex_dirs: Vec<PathBuf> = home_dirs
             .iter()
-            .map(|h| h.join(".codex").join("sessions"))
+            .map(|h| h.path.join(".codex").join("sessions"))
             .filter(|p| p.exists())
             .collect();
         v.push(Box::new(codex::CodexCollector::new_multi(codex_dirs)));
@@ -155,7 +180,7 @@ fn build_collectors(cfg: &config::Config) -> Vec<Box<dyn collector::Collector>> 
         } else {
             home_dirs
                 .iter()
-                .map(|h| h.join(".hermes"))
+                .map(|h| h.path.join(".hermes"))
                 .filter(|p| p.exists())
                 .collect()
         };
@@ -165,6 +190,19 @@ fn build_collectors(cfg: &config::Config) -> Vec<Box<dyn collector::Collector>> 
     v
 }
 
+/// Distinct WSL distros discovered across the resolved home directories —
+/// the set `App::tick` needs to poll each tick for WSL-sourced sessions'
+/// process liveness.
+fn wsl_distros(home_dirs: &[HomeDir]) -> Vec<String> {
+    let mut distros: Vec<String> = home_dirs
+        .iter()
+        .filter_map(|h| h.wsl_distro.clone())
+        .collect();
+    distros.sort();
+    distros.dedup();
+    distros
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config_path = dirs::config_dir()
@@ -172,9 +210,11 @@ pub fn run() {
         .join("ai-usage-overlay")
         .join("config.toml");
     let cfg = config::load_config(&config_path);
-    let collectors = build_collectors(&cfg);
+    let home_dirs = resolve_home_dirs();
+    let collectors = build_collectors(&cfg, &home_dirs);
+    let distros = wsl_distros(&home_dirs);
     let app_state = AppState {
-        app: Mutex::new(app::App::new(collectors)),
+        app: Mutex::new(app::App::new_with_wsl_distros(collectors, distros)),
         config: Mutex::new(cfg.clone()),
         config_path: config_path.clone(),
     };

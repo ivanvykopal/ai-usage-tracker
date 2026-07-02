@@ -16,6 +16,29 @@ pub struct ProcessSnapshot {
     pub ports_by_pid: HashMap<u32, Vec<u16>>,
 }
 
+/// Decode `wsl.exe` stdout. When wsl.exe's output isn't attached to a real
+/// console (always true for a piped `Command` capture), it switches to
+/// UTF-16LE instead of the console codepage/UTF-8 — decoding that as UTF-8
+/// (or lossy UTF-8) turns every character into garbage interleaved with NUL
+/// bytes, which silently breaks every downstream string match (distro names,
+/// paths, ps output). Detect that case by checking whether the bytes at odd
+/// offsets are NUL, as they are for ASCII text stored as UTF-16LE.
+pub fn decode_wsl_output(bytes: &[u8]) -> String {
+    let looks_utf16le = bytes.len() >= 4
+        && bytes.len() % 2 == 0
+        && bytes.iter().skip(1).step_by(2).take(16).all(|&b| b == 0);
+    if looks_utf16le {
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        if let Ok(s) = String::from_utf16(&units) {
+            return s.trim_start_matches('\u{feff}').to_string();
+        }
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Builds a snapshot of running processes (pid → cmd/rss/cpu/parent), the
 /// parent→children map, and listening TCP ports by pid.
 pub fn snapshot() -> ProcessSnapshot {
@@ -72,6 +95,56 @@ pub fn has_active_descendant(
         }
     }
     false
+}
+
+/// Builds a process snapshot for a WSL distribution by shelling out to
+/// `wsl.exe -d <distro> ps`, since the Windows host's own process list
+/// (via `sysinfo`) can't see PIDs inside the WSL VM. Used on native Windows
+/// only, and only for distros that a WSL-sourced config dir was found in.
+pub fn wsl_snapshot(distro: &str) -> ProcessSnapshot {
+    let mut procs: HashMap<u32, ProcInfo> = HashMap::new();
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+
+    if let Ok(out) = std::process::Command::new("wsl.exe")
+        .args(["-d", distro, "-e", "ps", "-eo", "pid,ppid,pcpu,rss,comm", "--no-headers"])
+        .output()
+    {
+        if out.status.success() {
+            let text = decode_wsl_output(&out.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() < 5 {
+                    continue;
+                }
+                let Ok(pid) = parts[0].parse::<u32>() else {
+                    continue;
+                };
+                let ppid = parts[1].parse::<u32>().ok();
+                let cpu: f32 = parts[2].parse().unwrap_or(0.0);
+                let rss_kb: u64 = parts[3].parse().unwrap_or(0);
+                let command = parts[4..].join(" ");
+                procs.insert(
+                    pid,
+                    ProcInfo {
+                        pid,
+                        command,
+                        rss_kb,
+                        cpu,
+                        parent_pid: ppid,
+                    },
+                );
+                if let Some(ppid) = ppid {
+                    children.entry(ppid).or_default().push(pid);
+                }
+            }
+        }
+    }
+
+    ProcessSnapshot {
+        procs,
+        children,
+        ports_by_pid: HashMap::new(),
+    }
 }
 
 /// Maps pid → listening TCP ports. Tries `netstat -ano` (Windows) first, then

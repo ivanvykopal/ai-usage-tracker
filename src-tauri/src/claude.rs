@@ -33,8 +33,16 @@ pub fn encode_cwd_path(cwd: &str) -> String {
         .collect()
 }
 
+/// A `.claude` config dir plus which WSL distro it was found under, if any
+/// (`None` for the native host). Lets `collect()` check pid liveness against
+/// the right process list — the Windows host can't see WSL's PIDs.
+pub struct ConfigDirEntry {
+    pub dir: PathBuf,
+    pub wsl_distro: Option<String>,
+}
+
 pub struct ClaudeCollector {
-    config_dirs: Vec<PathBuf>,
+    config_dirs: Vec<ConfigDirEntry>,
     readers: HashMap<String, IncrementalReader>,
     state: HashMap<String, ParseState>,
 }
@@ -90,16 +98,15 @@ struct ParseState {
 
 impl ClaudeCollector {
     pub fn new(config_dir: PathBuf) -> Self {
-        Self {
-            config_dirs: vec![config_dir],
-            readers: HashMap::new(),
-            state: HashMap::new(),
-        }
+        Self::new_multi(vec![ConfigDirEntry {
+            dir: config_dir,
+            wsl_distro: None,
+        }])
     }
 
     /// Create a collector that checks multiple configuration directories.
     /// This is useful for detecting sessions in both WSL and Windows environments.
-    pub fn new_multi(config_dirs: Vec<PathBuf>) -> Self {
+    pub fn new_multi(config_dirs: Vec<ConfigDirEntry>) -> Self {
         Self {
             config_dirs,
             readers: HashMap::new(),
@@ -118,7 +125,9 @@ impl Collector for ClaudeCollector {
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Collect sessions from all configured directories (e.g., WSL + Windows)
-        for config_dir in &self.config_dirs {
+        for entry in &self.config_dirs {
+            let config_dir = &entry.dir;
+            let (procs, children) = ctx.procs_for(entry.wsl_distro.as_deref());
             let sessions_dir = config_dir.join("sessions");
             // Account-level, so read once and share across every Claude session this tick.
             let rate_limit =
@@ -144,8 +153,7 @@ impl Collector for ClaudeCollector {
                 }
 
                 // Only keep sessions whose pid is alive and looks like claude.
-                let alive = ctx
-                    .procs
+                let alive = procs
                     .get(&sf.pid)
                     .map(|p| p.command.contains("claude"))
                     .unwrap_or(false);
@@ -175,10 +183,16 @@ impl Collector for ClaudeCollector {
                     }
                 }
                 let st = self.state.get(&sf.session_id).cloned().unwrap_or_default();
-                let proc = ctx.procs.get(&sf.pid);
+                let proc = procs.get(&sf.pid);
                 let mem_mb = proc.map(|p| p.rss_kb / 1024).unwrap_or(0);
-                let status = derive_status(&st, sf.pid, ctx);
+                let status = derive_status(&st, sf.pid, procs, children);
                 let project_name = sf.cwd.rsplit(['/', '\\']).next().unwrap_or("?").to_string();
+                let configured_model = read_configured_model(&sf.cwd);
+                let context_percent = crate::collector::context_percent_for(
+                    &st.model,
+                    &configured_model,
+                    st.last_context_tokens,
+                );
 
                 out.push(AgentSession {
                     agent_cli: "claude".into(),
@@ -189,7 +203,7 @@ impl Collector for ClaudeCollector {
                     started_at: sf.started_at,
                     status,
                     model: st.model.clone(),
-                    context_percent: 0.0, // needs per-model window sizes; deferred
+                    context_percent,
                     total_input_tokens: st.total_input,
                     total_output_tokens: st.total_output,
                     total_cache_read: st.total_cache_read,
@@ -212,8 +226,13 @@ impl Collector for ClaudeCollector {
     }
 }
 
-fn derive_status(st: &ParseState, pid: u32, ctx: &ProcessContext) -> SessionStatus {
-    let active_child = has_active_descendant(pid, ctx.procs, ctx.children);
+fn derive_status(
+    st: &ParseState,
+    pid: u32,
+    procs: &HashMap<u32, crate::process::ProcInfo>,
+    children: &HashMap<u32, Vec<u32>>,
+) -> SessionStatus {
+    let active_child = has_active_descendant(pid, procs, children);
     if active_child || st.pending_tool {
         SessionStatus::Executing
     } else if st.last_user_ts_ms > 0 {
@@ -265,7 +284,9 @@ fn apply_claude_line(line: &str, st: &mut ParseState) {
                     st.total_output += out;
                     st.total_cache_read += cr;
                     st.total_cache_create += cc;
-                    st.last_context_tokens = st.total_input + st.total_cache_read;
+                    // Context usage reflects what's in the window for THIS
+                    // turn, not the running session total.
+                    st.last_context_tokens = inp + cr + cc;
                 }
 
                 if let Some(model) = msg.get("model").and_then(|m| m.as_str()) {
@@ -342,6 +363,62 @@ fn is_synthetic_user_msg(entry: &Value) -> bool {
                 || t.starts_with("<bash-stderr>")
         }
         _ => false,
+    }
+}
+
+/// Returns the ordered list of Claude Code settings files to check, from
+/// highest to lowest priority, matching Claude Code's own resolution order:
+/// 1. `{cwd}/.claude/settings.local.json`
+/// 2. `{cwd}/.claude/settings.json`
+/// 3. `~/.claude/settings.local.json`
+/// 4. `~/.claude/settings.json`
+fn settings_candidate_paths(cwd: &str) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let cwd_path = PathBuf::from(cwd);
+    candidates.push(cwd_path.join(".claude").join("settings.local.json"));
+    candidates.push(cwd_path.join(".claude").join("settings.json"));
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".claude").join("settings.local.json"));
+        candidates.push(home.join(".claude").join("settings.json"));
+    }
+    candidates
+}
+
+/// Read the configured model from Claude Code's settings files.
+///
+/// Precedence (highest wins), matching Claude Code's own resolution order:
+/// 1. `CLAUDE_CODE_MODEL` env var
+/// 2. `{cwd}/.claude/settings.local.json`
+/// 3. `{cwd}/.claude/settings.json`
+/// 4. `~/.claude/settings.local.json`
+/// 5. `~/.claude/settings.json`
+///
+/// Returns an empty string when no model is configured. The value may include
+/// the `[1m]` suffix (e.g. `"sonnet[1m]"`) which is used to detect 1M context.
+fn read_configured_model(cwd: &str) -> String {
+    if let Ok(v) = std::env::var("CLAUDE_CODE_MODEL") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    for path in settings_candidate_paths(cwd) {
+        if let Some(model) = read_model_from_settings(&path) {
+            return model;
+        }
+    }
+    String::new()
+}
+
+fn read_model_from_settings(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let val: Value = serde_json::from_str(&content).ok()?;
+    let model = val.get("model")?.as_str()?.trim();
+    if model.is_empty() {
+        None
+    } else {
+        Some(model.to_string())
     }
 }
 

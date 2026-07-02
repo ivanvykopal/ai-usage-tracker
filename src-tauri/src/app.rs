@@ -1,6 +1,7 @@
 use crate::collector::{Collector, ProcessContext};
 use crate::model::{build_snapshot, Snapshot};
-use crate::process;
+use crate::process::{self, ProcessSnapshot};
+use std::collections::HashMap;
 
 /// Owns the collectors and runs the tick loop that refreshes them into a
 /// `Snapshot`. Collectors run sequentially (they share the sysinfo view),
@@ -8,21 +9,38 @@ use crate::process;
 /// and skipped for that tick — one broken agent never blanks the panel.
 pub struct App {
     collectors: Vec<Box<dyn Collector>>,
+    /// WSL distros to poll for a process snapshot each tick, so sessions
+    /// discovered under `\\wsl$\<distro>\...` (native Windows only) can have
+    /// their pid liveness checked against the right VM.
+    wsl_distros: Vec<String>,
 }
 
 impl App {
     pub fn new(collectors: Vec<Box<dyn Collector>>) -> Self {
-        Self { collectors }
+        Self::new_with_wsl_distros(collectors, Vec::new())
+    }
+
+    pub fn new_with_wsl_distros(collectors: Vec<Box<dyn Collector>>, wsl_distros: Vec<String>) -> Self {
+        Self {
+            collectors,
+            wsl_distros,
+        }
     }
 
     /// Refresh every collector against the current process state and return
     /// an aggregated `Snapshot`.
     pub fn tick(&mut self) -> Snapshot {
         let ps = process::snapshot();
+        let wsl: HashMap<String, ProcessSnapshot> = self
+            .wsl_distros
+            .iter()
+            .map(|d| (d.clone(), process::wsl_snapshot(d)))
+            .collect();
         let ctx = ProcessContext {
             procs: &ps.procs,
             children: &ps.children,
             ports: &ps.ports_by_pid,
+            wsl: &wsl,
         };
         let mut sessions = Vec::new();
         for c in &mut self.collectors {
