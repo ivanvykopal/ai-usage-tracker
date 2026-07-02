@@ -233,7 +233,7 @@ pub fn run() {
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
                     "../icons/128x128.png"
                 ))?)
-                .tooltip("AI Assistant Usage")
+                .tooltip("AI Usage Tracker")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
