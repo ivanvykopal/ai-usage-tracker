@@ -120,11 +120,31 @@ impl Collector for HermesCollector {
 /// session with `ended_at IS NULL`. Read-only connection so we never create
 /// or lock the agent's own database; any failure (missing file, locked,
 /// schema mismatch) degrades to "no active session" rather than erroring.
+///
+/// `state.db` is WAL-mode and actively written by Hermes, so we must NOT
+/// use the `immutable=1` URI hint here: it makes SQLite skip the WAL file
+/// entirely, which means missing not just recent rows but the schema
+/// itself whenever Hermes hasn't checkpointed yet (observed in practice:
+/// a freshly-(re)created `state.db` with an empty main file and all data,
+/// including the `sessions` table, sitting in the as-yet-unchecked `-wal`).
+///
+/// When Hermes runs inside WSL and this app runs natively on Windows, the
+/// db is reached over `\\wsl$\<distro>\...`. WAL's shared-memory (`-shm`)
+/// coordination relies on `mmap`, which doesn't work correctly over network
+/// filesystems (this is a documented SQLite limitation, not a timing
+/// race) — every read collides with Hermes's own writer and fails with
+/// `SQLITE_BUSY` ("database is locked"), even with a busy timeout, since
+/// there's nothing to wait out. Work around it the standard way: copy the
+/// db plus its `-wal`/`-shm` sidecars to a local temp path each poll and
+/// query that copy instead, so SQLite's locking never has to cross the
+/// network boundary.
 fn query_active_session(db_path: &Path) -> Option<ActiveSession> {
     if !db_path.exists() {
         return None;
     }
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let local_db_path = copy_db_locally(db_path)?;
+    let conn =
+        Connection::open_with_flags(&local_db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     conn.query_row(
         "SELECT id, model, input_tokens, output_tokens, cache_read_tokens, \
                 cache_write_tokens, message_count, cwd, started_at \
@@ -145,6 +165,39 @@ fn query_active_session(db_path: &Path) -> Option<ActiveSession> {
         },
     )
     .ok()
+}
+
+/// Copies `state.db` and its `-wal`/`-shm` sidecars (if present) into a
+/// local temp directory keyed by a hash of the source path, so distinct
+/// `data_dirs` (e.g. a Windows home and a WSL home) don't collide. Returns
+/// the path to the local copy of the main db file.
+fn copy_db_locally(db_path: &Path) -> Option<PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    db_path.hash(&mut hasher);
+    let tmp_dir = std::env::temp_dir()
+        .join("ai-usage-overlay-hermes")
+        .join(format!("{:x}", hasher.finish()));
+    std::fs::create_dir_all(&tmp_dir).ok()?;
+
+    let local_db = tmp_dir.join("state.db");
+    std::fs::copy(db_path, &local_db).ok()?;
+
+    for ext in ["-wal", "-shm"] {
+        let src = PathBuf::from(format!("{}{ext}", db_path.display()));
+        let dst = PathBuf::from(format!("{}{ext}", local_db.display()));
+        if src.exists() {
+            let _ = std::fs::copy(&src, &dst);
+        } else {
+            // Avoid a stale sidecar from a previous poll confusing SQLite
+            // about the copy's WAL state.
+            let _ = std::fs::remove_file(&dst);
+        }
+    }
+
+    Some(local_db)
 }
 
 /// Applies one `agent.log` line to the running status/task, scoped to
@@ -169,12 +222,27 @@ fn apply_log_line(
 
     if contains_any(&lower, &["thinking", "reasoning", "processing"]) {
         *status = SessionStatus::Thinking;
-    } else if lower.contains("tool") && contains_any(&lower, &["call", "executing", "running"]) {
+    } else if contains_any(
+        &lower,
+        &[
+            "tool call",
+            "tool starting",
+            "tool complete",
+            "executing tool",
+            "running tool",
+        ],
+    ) {
+        // Matched as adjacent phrases, not "tool" and "call" appearing
+        // independently anywhere in the line — a line like "Turn ended:
+        // ... tool_turns=0 ... api_calls=1/150" contains both words purely
+        // from unrelated field names and previously false-matched this as
+        // Executing, getting the status stuck since "ended" never matched
+        // the completion branch below either.
         *status = SessionStatus::Executing;
         if let Some(name) = extract_tool_name(message) {
             *current_task = name;
         }
-    } else if contains_any(&lower, &["complete", "finished", "done"]) {
+    } else if contains_any(&lower, &["complete", "finished", "done", "turn ended"]) {
         // The current turn wrapped up; the session itself stays active
         // (it would have dropped out of the SQL query otherwise) so this
         // reads as idle/waiting-for-input, not a terminal state.
