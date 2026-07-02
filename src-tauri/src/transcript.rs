@@ -16,7 +16,10 @@ pub struct IncrementalReader {
 
 impl IncrementalReader {
     pub fn new() -> Self {
-        Self { offset: 0, identity: None }
+        Self {
+            offset: 0,
+            identity: None,
+        }
     }
 
     /// Returns complete JSONL lines appended since the last call.
@@ -55,7 +58,7 @@ impl IncrementalReader {
                 return Vec::new();
             }
             Some(prev) if size > prev.size => self.offset, // normal append
-            Some(_) => 0u64, // shrink/truncation → re-read all
+            Some(_) => 0u64,                               // shrink/truncation → re-read all
         };
 
         let mut file = match fs::File::open(path) {

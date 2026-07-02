@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// (thinking/tool-execution/idle), scoped to that session's `[session_id]`
 /// tag so unrelated log lines from other tools don't bleed in.
 pub struct HermesCollector {
-    data_dir: PathBuf,
+    data_dirs: Vec<PathBuf>,
     log_reader: IncrementalReader,
     status: SessionStatus,
     current_task: String,
@@ -33,7 +33,18 @@ struct ActiveSession {
 impl HermesCollector {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
-            data_dir,
+            data_dirs: vec![data_dir],
+            log_reader: IncrementalReader::new(),
+            status: SessionStatus::Waiting,
+            current_task: String::new(),
+            last_session_id: String::new(),
+        }
+    }
+
+    /// Create a collector that checks multiple data directories.
+    pub fn new_multi(data_dirs: Vec<PathBuf>) -> Self {
+        Self {
+            data_dirs,
             log_reader: IncrementalReader::new(),
             status: SessionStatus::Waiting,
             current_task: String::new(),
@@ -48,50 +59,56 @@ impl Collector for HermesCollector {
     }
 
     fn collect(&mut self, _ctx: &ProcessContext) -> Vec<AgentSession> {
-        let db_path = self.data_dir.join("state.db");
-        let Some(active) = query_active_session(&db_path) else {
-            return Vec::new();
-        };
+        let mut all_sessions = Vec::new();
 
-        if active.id != self.last_session_id {
-            // A different (or first) session became active; drop any
-            // status/task carried over from whatever was active before.
-            self.last_session_id = active.id.clone();
-            self.status = SessionStatus::Waiting;
-            self.current_task.clear();
+        for data_dir in &self.data_dirs {
+            let db_path = data_dir.join("state.db");
+            let Some(active) = query_active_session(&db_path) else {
+                continue;
+            };
+
+            if active.id != self.last_session_id {
+                // A different (or first) session became active; drop any
+                // status/task carried over from whatever was active before.
+                self.last_session_id = active.id.clone();
+                self.status = SessionStatus::Waiting;
+                self.current_task.clear();
+            }
+
+            let log_path = data_dir.join("logs").join("agent.log");
+            for line in self.log_reader.read_new_lines(&log_path) {
+                apply_log_line(&line, &active.id, &mut self.status, &mut self.current_task);
+            }
+
+            let project_name = active
+                .cwd
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or("?")
+                .to_string();
+
+            all_sessions.push(AgentSession {
+                agent_cli: "hermes".into(),
+                pid: 0, // Hermes's SQLite schema doesn't expose a process id.
+                session_id: active.id,
+                cwd: active.cwd,
+                project_name,
+                started_at: (active.started_at * 1000.0) as i64,
+                status: self.status,
+                model: active.model,
+                context_percent: 0.0,
+                total_input_tokens: active.input_tokens,
+                total_output_tokens: active.output_tokens,
+                total_cache_read: active.cache_read_tokens,
+                total_cache_create: active.cache_write_tokens,
+                turn_count: active.message_count,
+                current_task: self.current_task.clone(),
+                mem_mb: 0,
+                rate_limit: None, // Hermes's API doc doesn't define 5h/weekly windows.
+            });
         }
 
-        let log_path = self.data_dir.join("logs").join("agent.log");
-        for line in self.log_reader.read_new_lines(&log_path) {
-            apply_log_line(&line, &active.id, &mut self.status, &mut self.current_task);
-        }
-
-        let project_name = active
-            .cwd
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or("?")
-            .to_string();
-
-        vec![AgentSession {
-            agent_cli: "hermes".into(),
-            pid: 0, // Hermes's SQLite schema doesn't expose a process id.
-            session_id: active.id,
-            cwd: active.cwd,
-            project_name,
-            started_at: (active.started_at * 1000.0) as i64,
-            status: self.status,
-            model: active.model,
-            context_percent: 0.0,
-            total_input_tokens: active.input_tokens,
-            total_output_tokens: active.output_tokens,
-            total_cache_read: active.cache_read_tokens,
-            total_cache_create: active.cache_write_tokens,
-            turn_count: active.message_count,
-            current_task: self.current_task.clone(),
-            mem_mb: 0,
-            rate_limit: None, // Hermes's API doc doesn't define 5h/weekly windows.
-        }]
+        all_sessions
     }
 }
 
@@ -130,7 +147,12 @@ fn query_active_session(db_path: &Path) -> Option<ActiveSession> {
 /// `session_id` via its `[session_id]` tag. Pattern priority (thinking,
 /// then tool-execution, then complete) matches the doc's own
 /// `STATUS_PATTERNS` dict order, where the first matching pattern wins.
-fn apply_log_line(line: &str, session_id: &str, status: &mut SessionStatus, current_task: &mut String) {
+fn apply_log_line(
+    line: &str,
+    session_id: &str,
+    status: &mut SessionStatus,
+    current_task: &mut String,
+) {
     let tag = format!("[{session_id}]");
     let Some((_, after_tag)) = line.split_once(tag.as_str()) else {
         return;
@@ -143,9 +165,7 @@ fn apply_log_line(line: &str, session_id: &str, status: &mut SessionStatus, curr
 
     if contains_any(&lower, &["thinking", "reasoning", "processing"]) {
         *status = SessionStatus::Thinking;
-    } else if lower.contains("tool")
-        && contains_any(&lower, &["call", "executing", "running"])
-    {
+    } else if lower.contains("tool") && contains_any(&lower, &["call", "executing", "running"]) {
         *status = SessionStatus::Executing;
         if let Some(name) = extract_tool_name(message) {
             *current_task = name;

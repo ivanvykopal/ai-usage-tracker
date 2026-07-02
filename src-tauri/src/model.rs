@@ -72,5 +72,10 @@ pub fn build_snapshot(sessions: Vec<AgentSession>) -> Snapshot {
         *by_agent_tokens.entry(s.agent_cli.clone()).or_insert(0) += t;
         *by_status.entry(s.status).or_insert(0) += 1;
     }
-    Snapshot { sessions, total_tokens, by_agent_tokens, by_status }
+    Snapshot {
+        sessions,
+        total_tokens,
+        by_agent_tokens,
+        by_status,
+    }
 }

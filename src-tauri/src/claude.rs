@@ -34,7 +34,7 @@ pub fn encode_cwd_path(cwd: &str) -> String {
 }
 
 pub struct ClaudeCollector {
-    config_dir: PathBuf,
+    config_dirs: Vec<PathBuf>,
     readers: HashMap<String, IncrementalReader>,
     state: HashMap<String, ParseState>,
 }
@@ -91,7 +91,17 @@ struct ParseState {
 impl ClaudeCollector {
     pub fn new(config_dir: PathBuf) -> Self {
         Self {
-            config_dir,
+            config_dirs: vec![config_dir],
+            readers: HashMap::new(),
+            state: HashMap::new(),
+        }
+    }
+
+    /// Create a collector that checks multiple configuration directories.
+    /// This is useful for detecting sessions in both WSL and Windows environments.
+    pub fn new_multi(config_dirs: Vec<PathBuf>) -> Self {
+        Self {
+            config_dirs,
             readers: HashMap::new(),
             state: HashMap::new(),
         }
@@ -104,97 +114,92 @@ impl Collector for ClaudeCollector {
     }
 
     fn collect(&mut self, ctx: &ProcessContext) -> Vec<AgentSession> {
-        let sessions_dir = self.config_dir.join("sessions");
         let mut out = Vec::new();
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-        // Account-level, so read once and share across every Claude session this tick.
-        let rate_limit =
-            rate_limit::read_rate_limit_file(&self.config_dir.join(CLAUDE_RATE_FILE), "claude");
 
-        let entries = match fs::read_dir(&sessions_dir) {
-            Ok(e) => e,
-            Err(_) => return out,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(sf) = serde_json::from_str::<SessionFile>(&text) else {
-                continue;
-            };
-            if !seen_ids.insert(sf.session_id.clone()) {
-                continue;
-            }
+        // Collect sessions from all configured directories (e.g., WSL + Windows)
+        for config_dir in &self.config_dirs {
+            let sessions_dir = config_dir.join("sessions");
+            // Account-level, so read once and share across every Claude session this tick.
+            let rate_limit =
+                rate_limit::read_rate_limit_file(&config_dir.join(CLAUDE_RATE_FILE), "claude");
 
-            // Only keep sessions whose pid is alive and looks like claude.
-            let alive = ctx
-                .procs
-                .get(&sf.pid)
-                .map(|p| p.command.contains("claude"))
-                .unwrap_or(false);
-            if !alive {
-                continue;
-            }
-
-            // Resolve project dir, handling worktree sessions and post-/clear renames
-            let project_dir = match resolve_project_dir(&self.config_dir, &sf.cwd, &sf.session_id) {
-                Some(dir) => dir,
-                None => continue,
+            let entries = match fs::read_dir(&sessions_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
             };
-            let transcript = project_dir.join(format!("{}.jsonl", sf.session_id));
-            if transcript.exists() {
-                let reader = self.readers.entry(sf.session_id.clone()).or_default();
-                let prev_offset = reader.offset;
-                let lines = reader.read_new_lines(&transcript);
-                let rewound = reader.offset < prev_offset && prev_offset > 0;
-                let st = self.state.entry(sf.session_id.clone()).or_default();
-                if rewound {
-                    // The transcript was truncated/rotated since last tick;
-                    // drop accumulated counters so we don't double-count.
-                    *st = ParseState::default();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
                 }
-                for line in lines {
-                    apply_claude_line(&line, st);
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(sf) = serde_json::from_str::<SessionFile>(&text) else {
+                    continue;
+                };
+                if !seen_ids.insert(sf.session_id.clone()) {
+                    continue;
                 }
-            }
-            let st = self
-                .state
-                .get(&sf.session_id)
-                .cloned()
-                .unwrap_or_default();
-            let proc = ctx.procs.get(&sf.pid);
-            let mem_mb = proc.map(|p| p.rss_kb / 1024).unwrap_or(0);
-            let status = derive_status(&st, sf.pid, ctx);
-            let project_name = sf
-                .cwd
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or("?")
-                .to_string();
 
-            out.push(AgentSession {
-                agent_cli: "claude".into(),
-                pid: sf.pid,
-                session_id: sf.session_id.clone(),
-                cwd: sf.cwd.clone(),
-                project_name,
-                started_at: sf.started_at,
-                status,
-                model: st.model.clone(),
-                context_percent: 0.0, // needs per-model window sizes; deferred
-                total_input_tokens: st.total_input,
-                total_output_tokens: st.total_output,
-                total_cache_read: st.total_cache_read,
-                total_cache_create: st.total_cache_create,
-                turn_count: 0,
-                current_task: st.current_task.clone(),
-                mem_mb,
-                rate_limit: rate_limit.clone(),
-            });
+                // Only keep sessions whose pid is alive and looks like claude.
+                let alive = ctx
+                    .procs
+                    .get(&sf.pid)
+                    .map(|p| p.command.contains("claude"))
+                    .unwrap_or(false);
+                if !alive {
+                    continue;
+                }
+
+                // Resolve project dir, handling worktree sessions and post-/clear renames
+                let project_dir = match resolve_project_dir(config_dir, &sf.cwd, &sf.session_id) {
+                    Some(dir) => dir,
+                    None => continue,
+                };
+                let transcript = project_dir.join(format!("{}.jsonl", sf.session_id));
+                if transcript.exists() {
+                    let reader = self.readers.entry(sf.session_id.clone()).or_default();
+                    let prev_offset = reader.offset;
+                    let lines = reader.read_new_lines(&transcript);
+                    let rewound = reader.offset < prev_offset && prev_offset > 0;
+                    let st = self.state.entry(sf.session_id.clone()).or_default();
+                    if rewound {
+                        // The transcript was truncated/rotated since last tick;
+                        // drop accumulated counters so we don't double-count.
+                        *st = ParseState::default();
+                    }
+                    for line in lines {
+                        apply_claude_line(&line, st);
+                    }
+                }
+                let st = self.state.get(&sf.session_id).cloned().unwrap_or_default();
+                let proc = ctx.procs.get(&sf.pid);
+                let mem_mb = proc.map(|p| p.rss_kb / 1024).unwrap_or(0);
+                let status = derive_status(&st, sf.pid, ctx);
+                let project_name = sf.cwd.rsplit(['/', '\\']).next().unwrap_or("?").to_string();
+
+                out.push(AgentSession {
+                    agent_cli: "claude".into(),
+                    pid: sf.pid,
+                    session_id: sf.session_id.clone(),
+                    cwd: sf.cwd.clone(),
+                    project_name,
+                    started_at: sf.started_at,
+                    status,
+                    model: st.model.clone(),
+                    context_percent: 0.0, // needs per-model window sizes; deferred
+                    total_input_tokens: st.total_input,
+                    total_output_tokens: st.total_output,
+                    total_cache_read: st.total_cache_read,
+                    total_cache_create: st.total_cache_create,
+                    turn_count: 0,
+                    current_task: st.current_task.clone(),
+                    mem_mb,
+                    rate_limit: rate_limit.clone(),
+                });
+            }
         }
 
         // Evict accumulated state for sessions no longer present (pid died /
@@ -242,21 +247,17 @@ fn apply_claude_line(line: &str, st: &mut ParseState) {
         "assistant" => {
             if let Some(msg) = v.get("message") {
                 // Extract usage data - try both "message.usage" and top-level "usage"
-                let usage = msg
-                    .get("usage")
-                    .or_else(|| v.get("usage"));
+                let usage = msg.get("usage").or_else(|| v.get("usage"));
 
                 if let Some(u) = usage {
-                    let inp = u.get("input_tokens")
+                    let inp = u.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
+                    let out = u.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
+                    let cr = u
+                        .get("cache_read_input_tokens")
                         .and_then(|n| n.as_u64())
                         .unwrap_or(0);
-                    let out = u.get("output_tokens")
-                        .and_then(|n| n.as_u64())
-                        .unwrap_or(0);
-                    let cr = u.get("cache_read_input_tokens")
-                        .and_then(|n| n.as_u64())
-                        .unwrap_or(0);
-                    let cc = u.get("cache_creation_input_tokens")
+                    let cc = u
+                        .get("cache_creation_input_tokens")
                         .and_then(|n| n.as_u64())
                         .unwrap_or(0);
 
@@ -313,7 +314,11 @@ fn apply_claude_line(line: &str, st: &mut ParseState) {
 /// local-command tag (`/plugin`, `!bash`, etc., which never invoke the
 /// model).
 fn is_synthetic_user_msg(entry: &Value) -> bool {
-    if entry.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if entry
+        .get("isMeta")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return true;
     }
     let Some(message) = entry.get("message") else {
@@ -322,9 +327,9 @@ fn is_synthetic_user_msg(entry: &Value) -> bool {
     match message.get("content") {
         Some(Value::Array(arr)) => {
             !arr.is_empty()
-                && arr.iter().all(|block| {
-                    block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                })
+                && arr
+                    .iter()
+                    .all(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
         }
         Some(Value::String(s)) => {
             let t = s.trim_start();

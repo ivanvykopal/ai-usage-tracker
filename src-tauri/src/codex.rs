@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 const RECENT_AGE_SECS: u64 = 300; // 5 min
 
 pub struct CodexCollector {
-    sessions_dir: PathBuf,
+    sessions_dirs: Vec<PathBuf>,
     readers: HashMap<PathBuf, IncrementalReader>,
     state: HashMap<PathBuf, CodexState>,
 }
@@ -39,25 +39,35 @@ struct CodexState {
 impl CodexCollector {
     pub fn new(sessions_dir: PathBuf) -> Self {
         Self {
-            sessions_dir,
+            sessions_dirs: vec![sessions_dir],
+            readers: HashMap::new(),
+            state: HashMap::new(),
+        }
+    }
+
+    /// Create a collector that checks multiple sessions directories.
+    pub fn new_multi(sessions_dirs: Vec<PathBuf>) -> Self {
+        Self {
+            sessions_dirs,
             readers: HashMap::new(),
             state: HashMap::new(),
         }
     }
 
     /// Today's session directory: `~/.codex/sessions/YYYY/MM/DD`.
-    fn today_dir(&self) -> Option<PathBuf> {
+    fn today_dirs(&self) -> Vec<PathBuf> {
         let now = chrono::Local::now();
-        let d = self
-            .sessions_dir
-            .join(now.format("%Y").to_string())
-            .join(now.format("%m").to_string())
-            .join(now.format("%d").to_string());
-        if d.exists() {
-            Some(d)
-        } else {
-            None
+        let mut dirs = Vec::new();
+        for sessions_dir in &self.sessions_dirs {
+            let d = sessions_dir
+                .join(now.format("%Y").to_string())
+                .join(now.format("%m").to_string())
+                .join(now.format("%d").to_string());
+            if d.exists() {
+                dirs.push(d);
+            }
         }
+        dirs
     }
 }
 
@@ -68,73 +78,72 @@ impl Collector for CodexCollector {
 
     fn collect(&mut self, _ctx: &ProcessContext) -> Vec<AgentSession> {
         let mut out = Vec::new();
-        let Some(today) = self.today_dir() else {
+        let today_dirs = self.today_dirs();
+        if today_dirs.is_empty() {
             return out;
-        };
-        let entries = match fs::read_dir(&today) {
-            Ok(e) => e,
-            Err(_) => return out,
-        };
+        }
+
         let mut seen: HashSet<PathBuf> = HashSet::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
-                continue;
-            }
-            if !is_recent(&path, RECENT_AGE_SECS) {
-                continue;
-            }
-            seen.insert(path.clone());
-
-            let reader = self.readers.entry(path.clone()).or_default();
-            let prev_offset = reader.offset;
-            let lines = reader.read_new_lines(&path);
-            let rewound = reader.offset < prev_offset && prev_offset > 0;
-            let st = self.state.entry(path.clone()).or_default();
-            if rewound {
-                *st = CodexState::default();
-            }
-            for line in lines {
-                apply_codex_line(&line, st);
-            }
-            let st = self.state.get(&path).cloned().unwrap_or_default();
-
-            let project_name = st
-                .cwd
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or("?")
-                .to_string();
-            let status = if st.task_complete {
-                SessionStatus::Done
-            } else if !st.pending_calls.is_empty() {
-                SessionStatus::Executing
-            } else if st.model_generating {
-                SessionStatus::Thinking
-            } else {
-                SessionStatus::Waiting
+        for sessions_dir in &today_dirs {
+            let entries = match fs::read_dir(sessions_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
             };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+                    continue;
+                }
+                if !is_recent(&path, RECENT_AGE_SECS) {
+                    continue;
+                }
+                seen.insert(path.clone());
 
-            out.push(AgentSession {
-                agent_cli: "codex".into(),
-                pid: 0, // v1 doesn't map rollout → pid
-                session_id: st.session_id.clone(),
-                cwd: st.cwd.clone(),
-                project_name,
-                started_at: 0,
-                status,
-                model: st.model.clone(),
-                context_percent: 0.0,
-                total_input_tokens: st.total_input,
-                total_output_tokens: st.total_output,
-                total_cache_read: st.total_cache_read,
-                total_cache_create: 0, // Codex doesn't report cache-creation tokens
-                turn_count: 0,
-                current_task: st.current_task.clone(),
-                mem_mb: 0,
-                rate_limit: st.rate_limit.clone(),
-            });
+                let reader = self.readers.entry(path.clone()).or_default();
+                let prev_offset = reader.offset;
+                let lines = reader.read_new_lines(&path);
+                let rewound = reader.offset < prev_offset && prev_offset > 0;
+                let st = self.state.entry(path.clone()).or_default();
+                if rewound {
+                    *st = CodexState::default();
+                }
+                for line in lines {
+                    apply_codex_line(&line, st);
+                }
+                let st = self.state.get(&path).cloned().unwrap_or_default();
+
+                let project_name = st.cwd.rsplit(['/', '\\']).next().unwrap_or("?").to_string();
+                let status = if st.task_complete {
+                    SessionStatus::Done
+                } else if !st.pending_calls.is_empty() {
+                    SessionStatus::Executing
+                } else if st.model_generating {
+                    SessionStatus::Thinking
+                } else {
+                    SessionStatus::Waiting
+                };
+
+                out.push(AgentSession {
+                    agent_cli: "codex".into(),
+                    pid: 0, // v1 doesn't map rollout → pid
+                    session_id: st.session_id.clone(),
+                    cwd: st.cwd.clone(),
+                    project_name,
+                    started_at: 0,
+                    status,
+                    model: st.model.clone(),
+                    context_percent: 0.0,
+                    total_input_tokens: st.total_input,
+                    total_output_tokens: st.total_output,
+                    total_cache_read: st.total_cache_read,
+                    total_cache_create: 0, // Codex doesn't report cache-creation tokens
+                    turn_count: 0,
+                    current_task: st.current_task.clone(),
+                    mem_mb: 0,
+                    rate_limit: st.rate_limit.clone(),
+                });
+            }
         }
 
         // Evict state for rollouts no longer recent/present.
@@ -156,7 +165,11 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_string();
-            st.cwd = v.get("cwd").and_then(|s| s.as_str()).unwrap_or("").to_string();
+            st.cwd = v
+                .get("cwd")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
             st.model = v
                 .get("model")
                 .and_then(|s| s.as_str())
@@ -164,7 +177,9 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
                 .to_string();
         }
         "event_msg" => {
-            let Some(payload) = v.get("payload") else { return };
+            let Some(payload) = v.get("payload") else {
+                return;
+            };
             let pty = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match pty {
                 "user_message" => {
@@ -229,7 +244,9 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
             }
         }
         "response_item" => {
-            let Some(payload) = v.get("payload") else { return };
+            let Some(payload) = v.get("payload") else {
+                return;
+            };
             match payload.get("type").and_then(|t| t.as_str()) {
                 Some("function_call") => {
                     st.model_generating = false;
@@ -274,6 +291,8 @@ fn is_recent(path: &Path, max_age_secs: u64) -> bool {
     let Ok(m) = meta.modified() else {
         return false;
     };
-    let age = SystemTime::now().duration_since(m).unwrap_or(Duration::ZERO);
+    let age = SystemTime::now()
+        .duration_since(m)
+        .unwrap_or(Duration::ZERO);
     age.as_secs() <= max_age_secs
 }
