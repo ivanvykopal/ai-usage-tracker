@@ -74,6 +74,7 @@ impl IncrementalReader {
         // '\n' is incomplete (the writer is mid-line); hold it back.
         let ends_with_newline = buf.ends_with('\n');
         let mut lines: Vec<String> = buf.split('\n').map(|s| s.to_string()).collect();
+
         if ends_with_newline {
             // split on a trailing '\n' yields a final empty element; drop it
             if lines.last().map(|s| s.is_empty()).unwrap_or(false) {
@@ -83,7 +84,7 @@ impl IncrementalReader {
         } else if !lines.is_empty() {
             // drop the incomplete trailing fragment, rewind offset to before it
             let fragment_len = lines.last().map(|s| s.len() as u64).unwrap_or(0);
-            self.offset = start + buf.len() as u64 - fragment_len;
+            self.offset = start + buf.len() as u64 - fragment_len - 1; // -1 for missing newline
             lines.pop();
         }
         self.identity = Some(identity);

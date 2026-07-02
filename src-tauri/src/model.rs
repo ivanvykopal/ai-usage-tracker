@@ -25,9 +25,27 @@ pub struct AgentSession {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cache_read: u64,
+    pub total_cache_create: u64,
     pub turn_count: u32,
     pub current_task: String,
     pub mem_mb: u64,
+    /// 5-hour / weekly (7-day) usage-limit windows, when available. `None`
+    /// when the agent doesn't report rate limits or none have been seen yet.
+    pub rate_limit: Option<RateLimitInfo>,
+}
+
+/// Account-level usage-limit windows, ported from abtop's `RateLimitInfo`.
+/// For Claude this comes from an externally-written status file (Claude
+/// Code itself doesn't expose it in the transcript); for Codex it's parsed
+/// live from `token_count` events.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RateLimitInfo {
+    pub source: String,
+    pub five_hour_pct: Option<f64>,
+    pub five_hour_resets_at: Option<u64>,
+    pub seven_day_pct: Option<f64>,
+    pub seven_day_resets_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

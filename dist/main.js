@@ -13,9 +13,21 @@ hideBtn.addEventListener("click", () => {
   window.__TAURI__.core.invoke("toggle_visibility");
 });
 
-// Opacity slider
+// Opacity slider — applied as CSS on the panel (Tauri has no cross-platform
+// native window-opacity API), persisted to config via the backend command.
+function applyOpacity(value) {
+  panel.style.opacity = value;
+  opacitySlider.value = value;
+}
+
 opacitySlider.addEventListener("input", () => {
-  window.__TAURI__.core.invoke("set_opacity", { opacity: parseFloat(opacitySlider.value) });
+  const value = parseFloat(opacitySlider.value);
+  applyOpacity(value);
+  window.__TAURI__.core.invoke("set_opacity", { opacity: value });
+});
+
+window.__TAURI__.event.listen("opacity://update", (e) => {
+  applyOpacity(e.payload);
 });
 
 // Subscribe to snapshot updates
@@ -42,6 +54,13 @@ function renderSnapshot(s) {
   }
   const rows = s.sessions.map(sess => {
     const bar = Math.min(100, Math.round(sess.context_percent || 0));
+    const rl = sess.rate_limit;
+    const rateLimitRow = rl
+      ? `<div class="rate-limit">
+          ${rl.five_hour_pct != null ? `<span>5h ${Math.round(rl.five_hour_pct)}%</span>` : ""}
+          ${rl.seven_day_pct != null ? `<span>week ${Math.round(rl.seven_day_pct)}%</span>` : ""}
+        </div>`
+      : "";
     return `
       <div class="row">
         <div class="head">
@@ -57,6 +76,7 @@ function renderSnapshot(s) {
           <span>${sess.mem_mb || 0}MB</span>
           <span class="task">${escapeHtml(sess.current_task || "")}</span>
         </div>
+        ${rateLimitRow}
       </div>`;
   }).join("");
   const totalTokens = s.total_tokens || 0;

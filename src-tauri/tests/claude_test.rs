@@ -5,8 +5,8 @@ use usage_tracker::claude::{encode_cwd_path, ClaudeCollector};
 use usage_tracker::collector::{Collector, ProcessContext};
 use usage_tracker::process::ProcInfo;
 
-fn build_fake_claude_root() -> PathBuf {
-    let root = std::env::temp_dir().join(format!("utt-claude-{}", std::process::id()));
+fn build_fake_claude_root(test_name: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("utt-claude-{}-{}", std::process::id(), test_name));
     // clean slate so re-runs don't see stale state
     let _ = fs::remove_dir_all(&root);
     let _ = fs::create_dir_all(root.join("sessions"));
@@ -48,7 +48,7 @@ fn encode_cwd_replaces_slash_and_colon() {
 
 #[test]
 fn collects_session_with_accumulated_tokens_and_project_name() {
-    let root = build_fake_claude_root();
+    let root = build_fake_claude_root("accumulated_tokens");
     // Pretend pid 4242 is alive as a 'claude' process.
     let mut procs = HashMap::new();
     procs.insert(
@@ -82,11 +82,42 @@ fn collects_session_with_accumulated_tokens_and_project_name() {
     assert_eq!(s.total_input_tokens, 8200);
     assert_eq!(s.total_output_tokens, 230);
     assert_eq!(s.total_cache_read, 10000);
+    assert_eq!(s.total_cache_create, 300);
+}
+
+#[test]
+fn synthetic_user_messages_do_not_pin_thinking_status() {
+    // The transcript's last line is a synthetic tool_result wrapper; if it
+    // were mistaken for a real prompt, the session would read as perpetually
+    // "Thinking" even with an alive, idle process and no pending tool call.
+    let root = build_fake_claude_root("synthetic_user_messages");
+    let mut procs = HashMap::new();
+    procs.insert(
+        4242,
+        ProcInfo {
+            pid: 4242,
+            command: "claude".into(),
+            rss_kb: 50_000,
+            cpu: 0.0,
+            parent_pid: None,
+        },
+    );
+    let kids = HashMap::new();
+    let ports = HashMap::new();
+    let ctx = ProcessContext {
+        procs: &procs,
+        children: &kids,
+        ports: &ports,
+    };
+
+    let mut c = ClaudeCollector::new(root);
+    let sessions = c.collect(&ctx);
+    assert_eq!(sessions[0].status, usage_tracker::model::SessionStatus::Waiting);
 }
 
 #[test]
 fn dead_pid_session_is_dropped() {
-    let root = build_fake_claude_root();
+    let root = build_fake_claude_root("dead_pid");
     let ctx = empty_ctx(); // no procs → pid 4242 not alive
     let mut c = ClaudeCollector::new(root);
     let sessions = c.collect(&ctx);

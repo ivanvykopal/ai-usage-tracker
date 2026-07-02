@@ -16,7 +16,7 @@ pub struct ProcessContext<'a> {
 /// `AgentSession`s. A collector that fails should return an empty `Vec` for
 /// the tick rather than panicking — `App::tick` additionally catches panics so
 /// one broken agent never blanks the panel.
-pub trait Collector {
+pub trait Collector: Send {
     fn name(&self) -> &str;
     fn collect(&mut self, ctx: &ProcessContext) -> Vec<AgentSession>;
 }

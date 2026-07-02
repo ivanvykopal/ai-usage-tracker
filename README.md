@@ -54,8 +54,21 @@ enabled_agents = ["claude", "codex", "hermes"]
 ## Features
 
 - **Claude Code**: Reads `~/.claude/sessions/*.json` and transcripts from `~/.claude/projects/`
-- **Codex CLI**: Reads today's rollouts from `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+- **Codex CLI**: Reads today's rollouts from `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, including live 5h/weekly rate-limit windows from `token_count` events
 - **Hermes**: Placeholder — needs data format specification
+
+### 5-hour / weekly usage limits
+
+Codex reports its own 5h/weekly rate-limit usage inside its transcript, so it shows up automatically. Claude Code does not expose this in the transcript — to see it here, configure a Claude Code [StatusLine hook](https://docs.claude.com/en/docs/claude-code/statusline) that writes `~/.claude/abtop-rate-limits.json`:
+
+```json
+{
+  "five_hour": { "used_percentage": 42.0, "resets_at": 1730000000 },
+  "seven_day": { "used_percentage": 18.5, "resets_at": 1730500000 }
+}
+```
+
+Without that file, the rate-limit row is simply omitted for Claude sessions.
 
 ## Key Bindings
 

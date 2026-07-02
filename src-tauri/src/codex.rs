@@ -1,8 +1,8 @@
 use crate::collector::{Collector, ProcessContext};
-use crate::model::{AgentSession, SessionStatus};
+use crate::model::{AgentSession, RateLimitInfo, SessionStatus};
 use crate::transcript::IncrementalReader;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -23,10 +23,17 @@ struct CodexState {
     model: String,
     total_input: u64,
     total_output: u64,
-    last_user: bool,
-    pending_tool: bool,
+    total_cache_read: u64,
+    /// True once a "user_message" event arrives and stays true until the
+    /// model visibly responds (agent_message/function_call/task_complete) —
+    /// mirrors abtop's `model_generating` flag, drives the Thinking status.
+    model_generating: bool,
+    /// call_id -> tool name, for every function_call without a matching
+    /// function_call_output yet. Non-empty means the session is Executing.
+    pending_calls: HashMap<String, String>,
     current_task: String,
     task_complete: bool,
+    rate_limit: Option<RateLimitInfo>,
 }
 
 impl CodexCollector {
@@ -68,7 +75,7 @@ impl Collector for CodexCollector {
             Ok(e) => e,
             Err(_) => return out,
         };
-        let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -101,9 +108,9 @@ impl Collector for CodexCollector {
                 .to_string();
             let status = if st.task_complete {
                 SessionStatus::Done
-            } else if st.pending_tool {
+            } else if !st.pending_calls.is_empty() {
                 SessionStatus::Executing
-            } else if st.last_user {
+            } else if st.model_generating {
                 SessionStatus::Thinking
             } else {
                 SessionStatus::Waiting
@@ -121,10 +128,12 @@ impl Collector for CodexCollector {
                 context_percent: 0.0,
                 total_input_tokens: st.total_input,
                 total_output_tokens: st.total_output,
-                total_cache_read: 0,
+                total_cache_read: st.total_cache_read,
+                total_cache_create: 0, // Codex doesn't report cache-creation tokens
                 turn_count: 0,
                 current_task: st.current_task.clone(),
                 mem_mb: 0,
+                rate_limit: st.rate_limit.clone(),
             });
         }
 
@@ -155,25 +164,63 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
                 .to_string();
         }
         "event_msg" => {
-            let pty = v
-                .get("payload")
-                .and_then(|p| p.get("type"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
+            let Some(payload) = v.get("payload") else { return };
+            let pty = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match pty {
                 "user_message" => {
-                    st.last_user = true;
-                    st.pending_tool = false;
+                    st.model_generating = true;
+                }
+                "agent_message" => {
+                    st.model_generating = false;
                 }
                 "token_count" => {
-                    let p = v.get("payload").unwrap();
-                    st.total_input += p.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-                    st.total_output += p.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-                    st.last_user = false;
+                    // Codex reports cumulative totals, not deltas, so this is
+                    // an overwrite — the latest event is authoritative.
+                    let usage = &payload["info"]["total_token_usage"];
+                    let input = usage["input_tokens"].as_u64().unwrap_or(0);
+                    let output = usage["output_tokens"].as_u64().unwrap_or(0);
+                    let cache = usage["cached_input_tokens"]
+                        .as_u64()
+                        .or_else(|| usage["cache_read_input_tokens"].as_u64())
+                        .unwrap_or(0);
+                    st.total_input = input.saturating_sub(cache);
+                    st.total_output = output;
+                    st.total_cache_read = cache;
+
+                    let rl = &payload["rate_limits"];
+                    if rl.is_object() && is_account_level_codex_rate_limit(rl) {
+                        let updated_at = v
+                            .get("timestamp")
+                            .and_then(|t| t.as_str())
+                            .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                            .map(|dt| dt.timestamp() as u64);
+                        let mut info = RateLimitInfo {
+                            source: "codex".to_string(),
+                            updated_at,
+                            ..Default::default()
+                        };
+                        for slot in ["primary", "secondary"] {
+                            let w = &rl[slot];
+                            if !w.is_object() {
+                                continue;
+                            }
+                            let mins = w["window_minutes"].as_u64().unwrap_or(0);
+                            let pct = w["used_percent"].as_f64();
+                            let resets = w["resets_at"].as_u64();
+                            if mins <= 300 {
+                                info.five_hour_pct = pct;
+                                info.five_hour_resets_at = resets;
+                            } else {
+                                info.seven_day_pct = pct;
+                                info.seven_day_resets_at = resets;
+                            }
+                        }
+                        st.rate_limit = Some(info);
+                    }
                 }
                 "task_complete" => {
                     st.task_complete = true;
-                    st.last_user = false;
+                    st.model_generating = false;
                 }
                 "task_started" => {
                     st.task_complete = false;
@@ -182,22 +229,42 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
             }
         }
         "response_item" => {
-            st.last_user = false;
-            let has_tool = v
-                .get("payload")
-                .and_then(|p| p.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("function_call"))
-                })
-                .unwrap_or(false);
-            st.pending_tool = has_tool;
-            if has_tool {
-                st.current_task = "function_call".to_string();
+            let Some(payload) = v.get("payload") else { return };
+            match payload.get("type").and_then(|t| t.as_str()) {
+                Some("function_call") => {
+                    st.model_generating = false;
+                    if let Some(call_id) = payload.get("call_id").and_then(|c| c.as_str()) {
+                        let name = payload
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        st.current_task = name.clone();
+                        st.pending_calls.insert(call_id.to_string(), name);
+                    }
+                }
+                Some("function_call_output") => {
+                    if let Some(call_id) = payload.get("call_id").and_then(|c| c.as_str()) {
+                        st.pending_calls.remove(call_id);
+                    }
+                    if st.pending_calls.is_empty() {
+                        st.current_task.clear();
+                    }
+                }
+                _ => {
+                    st.model_generating = false;
+                }
             }
         }
         _ => {}
     }
+}
+
+/// Codex emits per-project as well as account-level rate-limit snapshots;
+/// only the account-level one (no `limit_id`, or `limit_id: "codex"`) reflects
+/// the user's actual 5h/weekly usage.
+fn is_account_level_codex_rate_limit(rate_limits: &Value) -> bool {
+    matches!(rate_limits["limit_id"].as_str(), Some("codex") | None)
 }
 
 fn is_recent(path: &Path, max_age_secs: u64) -> bool {

@@ -12,7 +12,7 @@ fn missing_file_returns_defaults() {
 
 #[test]
 fn round_trip_preserves_values() {
-    let dir = tempfile_dir();
+    let dir = tempfile_dir("round_trip");
     let path = dir.join("config.toml");
     let mut cfg = default_config();
     cfg.poll_interval_ms = 2000;
@@ -27,15 +27,15 @@ fn round_trip_preserves_values() {
 
 #[test]
 fn corrupt_file_falls_back_to_defaults() {
-    let dir = tempfile_dir();
+    let dir = tempfile_dir("corrupt_file");
     let path = dir.join("config.toml");
     fs::write(&path, "this is = = not valid toml {{{").unwrap();
     let cfg = load_config(&path);
     assert_eq!(cfg.poll_interval_ms, 1000); // default
 }
 
-fn tempfile_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("utt-{}", std::process::id()));
+fn tempfile_dir(test_name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("utt-{}-{}", std::process::id(), test_name));
     let _ = fs::create_dir_all(&dir);
     dir
 }

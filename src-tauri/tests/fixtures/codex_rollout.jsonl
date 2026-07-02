@@ -1,5 +1,8 @@
 {"type":"session_meta","session_id":"codex-1","cwd":"/webapp","model":"gpt-5-codex","cli_version":"0.1","git":{"branch":"main"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"build it"}}
-{"type":"event_msg","payload":{"type":"token_count","input_tokens":900,"output_tokens":40,"rate_limit":{"remaining":5000}}}
-{"type":"response_item","payload":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}
-{"type":"event_msg","payload":{"type":"token_count","input_tokens":3000,"output_tokens":120}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"call-1","name":"shell","arguments":"{\"command\":[\"ls\"]}"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200,"output_tokens":40,"cached_input_tokens":200}}}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"ok"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"output_tokens":120,"cached_input_tokens":500}}}}
+{"type":"event_msg","payload":{"type":"task_complete"}}

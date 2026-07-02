@@ -10,7 +10,7 @@ fn build_fake_claude_root() -> PathBuf {
     let _ = fs::create_dir_all(root.join("projects").join("-proj"));
     fs::write(
         root.join("sessions").join("4242.json"),
-        r#"{ "pid": 4242, "cwd": "/proj", "session_id": "abc", "startedAt": 1700000000000 }"#,
+        r#"{ "pid": 4242, "cwd": "/proj", "sessionId": "abc", "startedAt": 1700000000000 }"#,
     )
     .unwrap();
     fs::write(

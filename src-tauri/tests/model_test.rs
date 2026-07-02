@@ -7,7 +7,8 @@ fn session(agent: &str, pid: u32, inp: u64, out: u64, status: SessionStatus) -> 
         cwd: "/proj".into(), project_name: "proj".into(), started_at: 0,
         status, model: "m".into(), context_percent: 0.0,
         total_input_tokens: inp, total_output_tokens: out, total_cache_read: 0,
-        turn_count: 0, current_task: String::new(), mem_mb: 0,
+        total_cache_create: 0,
+        turn_count: 0, current_task: String::new(), mem_mb: 0, rate_limit: None,
     }
 }
 
