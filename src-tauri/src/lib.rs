@@ -11,6 +11,7 @@ pub mod transcript;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -104,7 +105,7 @@ fn resolve_home_dirs() -> Vec<HomeDir> {
     } else {
         // We're on native Windows - check for WSL home directories
         // Try to discover WSL distributions and their users
-        if let Ok(output) = std::process::Command::new("wsl")
+        if let Ok(output) = process::silent_command("wsl")
             .args(["-l", "-q"])
             .output()
         {
@@ -118,7 +119,7 @@ fn resolve_home_dirs() -> Vec<HomeDir> {
                 }
 
                 // Get the default user for this distribution
-                if let Ok(user_output) = std::process::Command::new("wsl")
+                if let Ok(user_output) = process::silent_command("wsl")
                     .args(["-d", dist, "sh", "-c", "echo $HOME"])
                     .output()
                 {
@@ -225,12 +226,21 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
-            // Create tray icon; left-click toggles the panel.
+            // Create tray icon; left-click toggles the panel, right-click shows a menu.
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&quit_item])?;
             let _ = TrayIconBuilder::new()
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
                     "../icons/128x128.png"
                 ))?)
                 .tooltip("AI Assistant Usage")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    if event.id.as_ref() == "quit" {
+                        app.exit(0);
+                    }
+                })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,

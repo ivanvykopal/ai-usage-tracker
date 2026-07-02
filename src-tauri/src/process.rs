@@ -1,5 +1,21 @@
 use std::collections::HashMap;
+use std::process::Command;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Build a `Command` that won't flash a console window when spawned from a
+/// windowed (non-console) Windows app.
+pub fn silent_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
 
 #[derive(Debug, Clone)]
 pub struct ProcInfo {
@@ -105,7 +121,7 @@ pub fn wsl_snapshot(distro: &str) -> ProcessSnapshot {
     let mut procs: HashMap<u32, ProcInfo> = HashMap::new();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
 
-    if let Ok(out) = std::process::Command::new("wsl.exe")
+    if let Ok(out) = silent_command("wsl.exe")
         .args(["-d", distro, "-e", "ps", "-eo", "pid,ppid,pcpu,rss,comm", "--no-headers"])
         .output()
     {
@@ -163,7 +179,7 @@ fn listening_ports() -> HashMap<u32, Vec<u16>> {
 /// `netstat -ano -p TCP` → pid → listening ports. Output lines look like:
 ///   TCP    0.0.0.0:8080   0.0.0.0:0   LISTENING   1234
 fn parse_netstat() -> Option<HashMap<u32, Vec<u16>>> {
-    let out = std::process::Command::new("netstat")
+    let out = silent_command("netstat")
         .args(["-ano", "-p", "TCP"])
         .output()
         .ok()?;
@@ -200,7 +216,7 @@ fn parse_netstat() -> Option<HashMap<u32, Vec<u16>>> {
 /// to pid 0 (unknown) when the pid can't be parsed — but we skip those, since a
 /// port with no owner is useless for attributing to a session.
 fn parse_ss() -> Option<HashMap<u32, Vec<u16>>> {
-    let out = std::process::Command::new("ss")
+    let out = silent_command("ss")
         .args(["-tlnH"])
         .output()
         .ok()?;
