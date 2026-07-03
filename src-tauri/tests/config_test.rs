@@ -5,7 +5,7 @@ use usage_tracker::config::{default_config, load_config, save_config};
 fn missing_file_returns_defaults() {
     let cfg = load_config(std::path::Path::new("/nonexistent/config.toml"));
     assert_eq!(cfg.poll_interval_ms, 1000);
-    assert!((cfg.opacity - 0.85).abs() < 0.001);
+    assert!((cfg.opacity - 1.0).abs() < 0.001);
     assert_eq!(cfg.hotkey, "Ctrl+Shift+Space");
     assert_eq!(cfg.enabled_agents, vec!["claude", "codex", "hermes"]);
 }

@@ -15,7 +15,7 @@ pub struct Config {
 pub fn default_config() -> Config {
     Config {
         poll_interval_ms: 1000,
-        opacity: 0.85,
+        opacity: 1.0,
         window_x: None,
         window_y: None,
         hotkey: "Ctrl+Shift+Space".to_string(),

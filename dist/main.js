@@ -2,7 +2,6 @@ const panel = document.getElementById("panel");
 const content = document.getElementById("content");
 const titlebar = document.getElementById("titlebar");
 const hideBtn = document.getElementById("hide-btn");
-const opacitySlider = document.getElementById("opacity");
 
 // Drag via the title bar using Tauri's native startDragging
 titlebar.addEventListener("mousedown", () => {
@@ -11,23 +10,6 @@ titlebar.addEventListener("mousedown", () => {
 
 hideBtn.addEventListener("click", () => {
   window.__TAURI__.core.invoke("toggle_visibility");
-});
-
-// Opacity slider — applied as CSS on the panel (Tauri has no cross-platform
-// native window-opacity API), persisted to config via the backend command.
-function applyOpacity(value) {
-  panel.style.opacity = value;
-  opacitySlider.value = value;
-}
-
-opacitySlider.addEventListener("input", () => {
-  const value = parseFloat(opacitySlider.value);
-  applyOpacity(value);
-  window.__TAURI__.core.invoke("set_opacity", { opacity: value });
-});
-
-window.__TAURI__.event.listen("opacity://update", (e) => {
-  applyOpacity(e.payload);
 });
 
 // Subscribe to snapshot updates
