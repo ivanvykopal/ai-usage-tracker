@@ -17,6 +17,9 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+[dev-dependencies]
+filetime = "0.2"
+
 [lib]
 name = "usage_tracker"
 path = "src/lib.rs"

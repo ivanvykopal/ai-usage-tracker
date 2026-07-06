@@ -14,6 +14,10 @@ pub struct CodexCollector {
     sessions_dirs: Vec<PathBuf>,
     readers: HashMap<PathBuf, IncrementalReader>,
     state: HashMap<PathBuf, CodexState>,
+    /// Last-known account-level usage, retained even after the rollout that
+    /// produced it is no longer "recent" (session ended) or is evicted from
+    /// `state`. Cleared only by a fresh, differing value from a later tick.
+    last_usage_limits: Option<RateLimitInfo>,
 }
 
 #[derive(Default, Clone)]
@@ -50,6 +54,7 @@ impl CodexCollector {
             sessions_dirs: vec![sessions_dir],
             readers: HashMap::new(),
             state: HashMap::new(),
+            last_usage_limits: None,
         }
     }
 
@@ -59,6 +64,7 @@ impl CodexCollector {
             sessions_dirs,
             readers: HashMap::new(),
             state: HashMap::new(),
+            last_usage_limits: None,
         }
     }
 
@@ -104,6 +110,25 @@ impl Collector for CodexCollector {
                     continue;
                 }
                 if !is_recent(&path, RECENT_AGE_SECS) {
+                    // Not live, but still worth a one-off scan for its last
+                    // known account-level usage — covers "app just launched,
+                    // no session started yet today."
+                    if let Ok(text) = fs::read_to_string(&path) {
+                        let mut scratch = CodexState::default();
+                        for line in text.lines() {
+                            apply_codex_line(line, &mut scratch);
+                        }
+                        if let Some(rl) = scratch.rate_limit {
+                            let is_newer = self
+                                .last_usage_limits
+                                .as_ref()
+                                .map(|cur| rl.updated_at.unwrap_or(0) > cur.updated_at.unwrap_or(0))
+                                .unwrap_or(true);
+                            if is_newer {
+                                self.last_usage_limits = Some(rl);
+                            }
+                        }
+                    }
                     continue;
                 }
                 seen.insert(path.clone());
@@ -164,10 +189,26 @@ impl Collector for CodexCollector {
             }
         }
 
+        // Capture the latest account-level usage limit across all rollouts
+        // seen this tick *before* evicting stale state, so a session ending
+        // doesn't blank previously-known usage.
+        if let Some(latest) = self
+            .state
+            .values()
+            .filter_map(|st| st.rate_limit.clone())
+            .max_by_key(|rl| rl.updated_at.unwrap_or(0))
+        {
+            self.last_usage_limits = Some(latest);
+        }
+
         // Evict state for rollouts no longer recent/present.
         self.state.retain(|p, _| seen.contains(p));
         self.readers.retain(|p, _| seen.contains(p));
         out
+    }
+
+    fn usage_limits(&self) -> Option<RateLimitInfo> {
+        self.last_usage_limits.clone()
     }
 }
 
