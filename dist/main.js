@@ -104,7 +104,7 @@ function fmtCountdown(resetsAtSecs) {
   return `${days}d`;
 }
 
-function renderUsageWindow(label, pct, resetsAt) {
+function renderUsageWindow(label, pct, resetsAt, etaMs) {
   // A provider only reports the windows its plan actually has (e.g. Codex's
   // free plan reports only "month", no five-hour/weekly at all) — omit
   // entirely rather than showing a "label —" placeholder for windows that
@@ -112,10 +112,12 @@ function renderUsageWindow(label, pct, resetsAt) {
   if (pct == null) return "";
   const clamped = Math.min(100, Math.max(0, Math.round(pct)));
   const countdown = fmtCountdown(resetsAt);
+  const eta = etaMs != null ? fmtDuration(etaMs) : null;
   return `<span class="usage-window">
       ${label} <span class="usage-pct">${clamped}%</span>
       <span class="bar usage-bar"><span class="bar-fill" style="width:${clamped}%"></span></span>
       ${countdown ? `<span class="usage-reset">resets ${countdown}</span>` : ""}
+      ${eta ? `<span class="usage-eta">&#8776;${eta} to limit</span>` : ""}
     </span>`;
 }
 
@@ -126,9 +128,9 @@ function renderUsageLimits(usageLimits) {
     const rl = usageLimits[agent];
     const label = AGENT_LABEL[agent] || agent;
     const windows = [
-      renderUsageWindow("5h", rl.five_hour_pct, rl.five_hour_resets_at),
-      renderUsageWindow("week", rl.seven_day_pct, rl.seven_day_resets_at),
-      renderUsageWindow("month", rl.monthly_pct, rl.monthly_resets_at),
+      renderUsageWindow("5h", rl.five_hour_pct, rl.five_hour_resets_at, rl.five_hour_eta_ms),
+      renderUsageWindow("week", rl.seven_day_pct, rl.seven_day_resets_at, rl.seven_day_eta_ms),
+      renderUsageWindow("month", rl.monthly_pct, rl.monthly_resets_at, rl.monthly_eta_ms),
     ].filter(Boolean).join("");
     if (!windows) return "";
     return `<div class="usage-row">
