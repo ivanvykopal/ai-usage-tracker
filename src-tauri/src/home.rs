@@ -6,6 +6,7 @@ use std::path::PathBuf;
 /// `Some(name)` for a home directory reached through `\\wsl$\<name>\...` on
 /// native Windows. Collectors use this to know when a session's pid must be
 /// checked against that distro's own process list instead of the host's.
+#[derive(Clone)]
 pub struct HomeDir {
     pub path: PathBuf,
     pub wsl_distro: Option<String>,

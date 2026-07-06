@@ -25,6 +25,7 @@ struct AppState {
     config: Mutex<config::Config>,
     config_path: PathBuf,
     history_conn: Option<Mutex<rusqlite::Connection>>,
+    home_dirs: Vec<home::HomeDir>,
 }
 
 #[tauri::command]
@@ -87,6 +88,30 @@ fn get_usage_history(state: tauri::State<AppState>, agent: String, hours: u32) -
         .collect()
 }
 
+#[tauri::command]
+fn get_config(state: tauri::State<AppState>) -> config::Config {
+    state.config.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn list_providers() -> Vec<(String, String)> {
+    providers::ALL.iter().map(|p| (p.key.to_string(), p.label.to_string())).collect()
+}
+
+#[tauri::command]
+fn set_enabled_agents(state: tauri::State<AppState>, agents: Vec<String>) {
+    let mut cfg = match state.config.lock() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    cfg.enabled_agents = agents;
+    let _ = config::save_config(&state.config_path, &cfg);
+    let new_collectors = providers::build_collectors(&cfg, &state.home_dirs);
+    if let Ok(mut app) = state.app.lock() {
+        app.set_collectors(new_collectors);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config_path = dirs::config_dir()
@@ -120,6 +145,7 @@ pub fn run() {
         config: Mutex::new(cfg.clone()),
         config_path: config_path.clone(),
         history_conn,
+        home_dirs: home_dirs.clone(),
     };
 
     tauri::Builder::default()
@@ -270,6 +296,9 @@ pub fn run() {
             set_poll_interval,
             quit,
             get_usage_history,
+            get_config,
+            list_providers,
+            set_enabled_agents,
             set_compact_view
         ])
         .run(tauri::generate_context!())

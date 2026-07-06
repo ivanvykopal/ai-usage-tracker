@@ -31,6 +31,13 @@ impl App {
         }
     }
 
+    /// Replaces the running set of collectors — used when the user toggles
+    /// which providers are enabled from the in-app settings panel, so a change
+    /// takes effect on the very next tick without an app restart.
+    pub fn set_collectors(&mut self, collectors: Vec<Box<dyn Collector>>) {
+        self.collectors = collectors;
+    }
+
     /// Refresh every collector against the current process state and return
     /// an aggregated `Snapshot`.
     pub fn tick(&mut self) -> Snapshot {
