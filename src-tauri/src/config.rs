@@ -25,6 +25,10 @@ pub struct Config {
     /// flagged `stalled` and (once) notified about. `0` disables the feature.
     #[serde(default = "default_stall_alert_secs")]
     pub stall_alert_secs: u64,
+    /// When true, render each session row in a compact form that hides most
+    /// per-token meta spans. Defaults to false (current expanded behavior).
+    #[serde(default)]
+    pub compact_view: bool,
 }
 
 fn default_claude_usage_enabled() -> bool {
@@ -56,6 +60,7 @@ pub fn default_config() -> Config {
         history_enabled: true,
         history_retention_days: 30,
         stall_alert_secs: 180,
+        compact_view: false,
     }
 }
 

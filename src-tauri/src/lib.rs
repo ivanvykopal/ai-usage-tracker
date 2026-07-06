@@ -58,6 +58,15 @@ fn set_poll_interval(state: tauri::State<AppState>, ms: u64) {
 }
 
 #[tauri::command]
+fn set_compact_view(window: tauri::Window, state: tauri::State<AppState>, compact: bool) {
+    if let Ok(mut cfg) = state.config.lock() {
+        cfg.compact_view = compact;
+        let _ = config::save_config(&state.config_path, &cfg);
+    }
+    let _ = window.emit("compact://update", compact);
+}
+
+#[tauri::command]
 fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -156,6 +165,7 @@ pub fn run() {
             // Initial opacity: applied as CSS by the frontend, not a native window API.
             if let Some(w) = app_handle.get_webview_window("overlay") {
                 let _ = w.emit("opacity://update", cfg.opacity);
+                let _ = w.emit("compact://update", cfg.compact_view);
             }
 
             // Global hotkey: Ctrl+Shift+Space toggles visibility
@@ -259,7 +269,8 @@ pub fn run() {
             set_opacity,
             set_poll_interval,
             quit,
-            get_usage_history
+            get_usage_history,
+            set_compact_view
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
