@@ -26,6 +26,54 @@ window.__TAURI__.event.listen("compact://update", (e) => {
   panel.classList.toggle("compact", compactView);
 });
 
+const settingsBtn = document.getElementById("settings-btn");
+const settingsPanel = document.getElementById("settings");
+const opacitySlider = document.getElementById("opacity-slider");
+const pollIntervalInput = document.getElementById("poll-interval-input");
+const providerToggles = document.getElementById("provider-toggles");
+
+settingsBtn.addEventListener("click", async () => {
+  const willOpen = settingsPanel.classList.contains("hidden");
+  settingsPanel.classList.toggle("hidden");
+  if (willOpen) await loadSettings();
+});
+
+async function loadSettings() {
+  const [cfg, providers] = await Promise.all([
+    window.__TAURI__.core.invoke("get_config"),
+    window.__TAURI__.core.invoke("list_providers"),
+  ]);
+  opacitySlider.value = cfg.opacity;
+  pollIntervalInput.value = cfg.poll_interval_ms;
+  providerToggles.innerHTML = providers.map(([key, label]) => `
+    <label class="settings-row">
+      <input type="checkbox" data-provider="${key}" ${cfg.enabled_agents.includes(key) ? "checked" : ""} />
+      ${escapeHtml(label)}
+    </label>
+  `).join("");
+  providerToggles.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", onProviderToggleChange);
+  });
+}
+
+function onProviderToggleChange() {
+  const checked = Array.from(providerToggles.querySelectorAll("input[type=checkbox]:checked"))
+    .map(cb => cb.dataset.provider);
+  window.__TAURI__.core.invoke("set_enabled_agents", { agents: checked });
+}
+
+opacitySlider.addEventListener("input", () => {
+  window.__TAURI__.core.invoke("set_opacity", { opacity: parseFloat(opacitySlider.value) });
+});
+pollIntervalInput.addEventListener("change", () => {
+  window.__TAURI__.core.invoke("set_poll_interval", { ms: parseInt(pollIntervalInput.value, 10) });
+});
+
+window.__TAURI__.event.listen("opacity://update", (e) => {
+  panel.style.opacity = e.payload;
+  opacitySlider.value = e.payload;
+});
+
 // Subscribe to snapshot updates
 const STATUS_LABEL = {
   waiting: "Waiting",

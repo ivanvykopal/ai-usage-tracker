@@ -8,8 +8,20 @@
     <div id="panel">
       <div id="titlebar">
         <span>AI Usage Tracker</span>
+        <span id="settings-btn" title="Settings">&#9881;</span>
         <button id="compact-btn" title="Toggle compact view">&#8942;</button>
         <button id="hide-btn" title="Hide">_</button>
+      </div>
+      <div id="settings" class="hidden">
+        <div class="settings-row">
+          <label for="opacity-slider">Opacity</label>
+          <input type="range" id="opacity-slider" min="0.1" max="1" step="0.05" />
+        </div>
+        <div class="settings-row">
+          <label for="poll-interval-input">Poll interval (ms)</label>
+          <input type="number" id="poll-interval-input" min="200" step="100" />
+        </div>
+        <div id="provider-toggles"></div>
       </div>
       <div id="usage-limits"></div>
       <canvas id="history-chart" height="28"></canvas>

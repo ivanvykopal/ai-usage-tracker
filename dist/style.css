@@ -20,9 +20,14 @@ body { -webkit-user-select: none; user-select: none; }
   font-weight: 600;
 }
 #titlebar:active { cursor: grabbing; }
+#settings-btn { background: transparent; border: none; color: #aaa; cursor: pointer; font-size: 13px; }
 #compact-btn, #hide-btn {
   background: transparent; border: none; color: #aaa; cursor: pointer; font-size: 14px;
 }
+#settings { padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+#settings.hidden { display: none; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.settings-row input[type="range"], .settings-row input[type="number"] { width: 110px; }
 .compact .meta > span:not(.task) { display: none; }
 .compact .meta .task { font-size: 9px; }
 .compact .row { padding: 3px 0; }
