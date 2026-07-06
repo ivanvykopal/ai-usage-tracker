@@ -45,7 +45,7 @@ function renderSnapshot(s) {
   if (!s.sessions || s.sessions.length === 0) {
     return '<div class="empty">No active AI assistants</div>';
   }
-  const rows = s.sessions.map(sess => {
+  function renderSessionRow(sess) {
     const bar = Math.min(100, Math.round(sess.context_percent || 0));
     const usage = (sess.total_input_tokens || 0)
       + (sess.total_output_tokens || 0)
@@ -65,7 +65,6 @@ function renderSnapshot(s) {
           <span class="dot dot-${sess.agent_cli}"></span>
           <span class="agent">${sess.agent_cli}</span>
           ${sess.model ? `<span class="model">${escapeHtml(sess.model)}</span>` : ""}
-          <span class="proj">${escapeHtml(sess.project_name || "")}</span>
           <span class="status status-${sess.status}">${STATUS_LABEL[sess.status] || sess.status}</span>
         </div>
         <div class="bar"><div class="bar-fill" style="width:${bar}%"></div></div>
@@ -79,7 +78,25 @@ function renderSnapshot(s) {
           <span class="task">${escapeHtml(sess.current_task || "")}</span>
         </div>
       </div>`;
-  }).join("");
+  }
+
+  function groupByProject(sessions) {
+    const groups = new Map();
+    for (const sess of sessions) {
+      const key = sess.project_name || "(unknown)";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(sess);
+    }
+    return groups;
+  }
+
+  const groups = groupByProject(s.sessions);
+  const rows = Array.from(groups.entries()).map(([project, sessions]) => `
+    <div class="project-group">
+      <div class="project-header">${escapeHtml(project)} <span class="project-count">${sessions.length}</span></div>
+      ${sessions.map(renderSessionRow).join("")}
+    </div>
+  `).join("");
   const totalTokens = s.total_tokens || 0;
   const totalCost = s.total_cost_usd || 0;
   const liveCount = s.sessions.length;
