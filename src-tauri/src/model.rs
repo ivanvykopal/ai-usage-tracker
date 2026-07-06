@@ -36,7 +36,7 @@ pub struct AgentSession {
 /// rather than on individual sessions. For Claude this comes from Anthropic's
 /// usage API (with a hook-file fallback); for Codex it's parsed live from
 /// `token_count` events.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitInfo {
     pub source: String,
     pub five_hour_pct: Option<f64>,
