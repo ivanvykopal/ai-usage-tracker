@@ -2,7 +2,6 @@ pub mod app;
 pub mod claude_usage;
 pub mod collector;
 pub mod config;
-pub mod hermes;
 pub mod home;
 pub mod model;
 pub mod process;
@@ -58,26 +57,6 @@ fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-fn build_collectors(cfg: &config::Config, home_dirs: &[home::HomeDir]) -> Vec<Box<dyn collector::Collector>> {
-    let mut v: Vec<Box<dyn collector::Collector>> = Vec::new();
-
-    if cfg.enabled_agents.iter().any(|a| a == "hermes") {
-        // HERMES_HOME defaults to ~/.hermes; only override via config.
-        let hermes_dirs: Vec<PathBuf> = if let Some(ref custom_dir) = cfg.hermes_data_dir {
-            vec![custom_dir.clone()]
-        } else {
-            home_dirs
-                .iter()
-                .map(|h| h.path.join(".hermes"))
-                .filter(|p| p.exists())
-                .collect()
-        };
-        v.push(Box::new(hermes::HermesCollector::new_multi(hermes_dirs)));
-    }
-
-    v
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config_path = dirs::config_dir()
@@ -86,7 +65,7 @@ pub fn run() {
         .join("config.toml");
     let cfg = config::load_config(&config_path);
     let home_dirs = home::resolve_home_dirs();
-    let collectors = build_collectors(&cfg, &home_dirs);
+    let collectors = providers::build_collectors(&cfg, &home_dirs);
     let distros = home::wsl_distros(&home_dirs);
     let app_state = AppState {
         app: Mutex::new(app::App::new_with_wsl_distros(collectors, distros)),

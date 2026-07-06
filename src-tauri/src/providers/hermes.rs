@@ -1,4 +1,6 @@
 use crate::collector::{Collector, ProcessContext};
+use crate::config::Config;
+use crate::home::HomeDir;
 use crate::model::{AgentSession, SessionStatus};
 use crate::transcript::IncrementalReader;
 use rusqlite::{Connection, OpenFlags};
@@ -261,4 +263,20 @@ fn extract_tool_name(message: &str) -> Option<String> {
         }
     }
     None
+}
+
+pub fn build(cfg: &Config, home_dirs: &[HomeDir]) -> Option<Box<dyn Collector>> {
+    let hermes_dirs: Vec<std::path::PathBuf> = if let Some(ref custom_dir) = cfg.hermes_data_dir {
+        vec![custom_dir.clone()]
+    } else {
+        home_dirs
+            .iter()
+            .map(|h| h.path.join(".hermes"))
+            .filter(|p| p.exists())
+            .collect()
+    };
+    if hermes_dirs.is_empty() {
+        return None;
+    }
+    Some(Box::new(HermesCollector::new_multi(hermes_dirs)))
 }
