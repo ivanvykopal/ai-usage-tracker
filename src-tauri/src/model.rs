@@ -29,6 +29,10 @@ pub struct AgentSession {
     pub turn_count: u32,
     pub current_task: String,
     pub mem_mb: u64,
+    /// USD cost estimate for this session's tokens, or `None` if the model
+    /// isn't in `pricing::TABLE`. Populated by `App::tick` after `collect()`,
+    /// not by individual collectors — see `pricing::estimate_cost_usd`.
+    pub cost_usd: Option<f64>,
 }
 
 /// Account-level usage-limit windows, ported from abtop's `RateLimitInfo`.
@@ -58,6 +62,8 @@ pub struct Snapshot {
     pub by_agent_tokens: HashMap<String, u64>,
     pub by_status: HashMap<SessionStatus, u32>,
     pub usage_limits: BTreeMap<String, RateLimitInfo>,
+    pub total_cost_usd: f64,
+    pub by_agent_cost_usd: HashMap<String, f64>,
 }
 
 pub fn build_snapshot(
@@ -67,6 +73,8 @@ pub fn build_snapshot(
     let mut total_tokens: u64 = 0;
     let mut by_agent_tokens: HashMap<String, u64> = HashMap::new();
     let mut by_status: HashMap<SessionStatus, u32> = HashMap::new();
+    let mut total_cost_usd: f64 = 0.0;
+    let mut by_agent_cost_usd: HashMap<String, f64> = HashMap::new();
     // Pre-populate all statuses to ensure every variant has an entry
     by_status.insert(SessionStatus::Waiting, 0);
     by_status.insert(SessionStatus::Thinking, 0);
@@ -78,6 +86,10 @@ pub fn build_snapshot(
         total_tokens += t;
         *by_agent_tokens.entry(s.agent_cli.clone()).or_insert(0) += t;
         *by_status.entry(s.status).or_insert(0) += 1;
+        if let Some(cost) = s.cost_usd {
+            total_cost_usd += cost;
+            *by_agent_cost_usd.entry(s.agent_cli.clone()).or_insert(0.0) += cost;
+        }
     }
     Snapshot {
         sessions,
@@ -85,5 +97,7 @@ pub fn build_snapshot(
         by_agent_tokens,
         by_status,
         usage_limits,
+        total_cost_usd,
+        by_agent_cost_usd,
     }
 }

@@ -110,6 +110,7 @@ impl Collector for HermesCollector {
                 turn_count: active.message_count,
                 current_task: self.current_task.clone(),
                 mem_mb: 0,
+                cost_usd: None,
             });
         }
 
