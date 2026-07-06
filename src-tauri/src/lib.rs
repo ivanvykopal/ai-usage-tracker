@@ -1,6 +1,5 @@
 pub mod app;
 pub mod claude_usage;
-pub mod codex;
 pub mod collector;
 pub mod config;
 pub mod hermes;
@@ -61,15 +60,6 @@ fn quit(app: tauri::AppHandle) {
 
 fn build_collectors(cfg: &config::Config, home_dirs: &[home::HomeDir]) -> Vec<Box<dyn collector::Collector>> {
     let mut v: Vec<Box<dyn collector::Collector>> = Vec::new();
-
-    if cfg.enabled_agents.iter().any(|a| a == "codex") {
-        let codex_dirs: Vec<PathBuf> = home_dirs
-            .iter()
-            .map(|h| h.path.join(".codex").join("sessions"))
-            .filter(|p| p.exists())
-            .collect();
-        v.push(Box::new(codex::CodexCollector::new_multi(codex_dirs)));
-    }
 
     if cfg.enabled_agents.iter().any(|a| a == "hermes") {
         // HERMES_HOME defaults to ~/.hermes; only override via config.
