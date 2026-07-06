@@ -117,6 +117,15 @@ impl Collector for HermesCollector {
 
         all_sessions
     }
+
+    fn usage_limits(&self) -> Option<crate::model::RateLimitInfo> {
+        self.data_dirs.iter().find_map(|dir| {
+            crate::rate_limit::read_rate_limit_file(
+                &dir.join(crate::rate_limit::CLAUDE_RATE_FILE),
+                "hermes",
+            )
+        })
+    }
 }
 
 /// Mirrors the doc's "Active Session Query": the most recently started
@@ -281,4 +290,93 @@ pub fn build(cfg: &Config, home_dirs: &[HomeDir]) -> Option<Box<dyn Collector>> 
         return None;
     }
     Some(Box::new(HermesCollector::new_multi(hermes_dirs)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::SessionStatus;
+
+    #[test]
+    fn thinking_keyword_sets_thinking_status() {
+        let mut status = SessionStatus::Waiting;
+        let mut task = String::new();
+        apply_log_line("[abc] Agent is thinking about the next step", "abc", &mut status, &mut task);
+        assert_eq!(status, SessionStatus::Thinking);
+    }
+
+    #[test]
+    fn tool_call_sets_executing_and_extracts_name() {
+        let mut status = SessionStatus::Waiting;
+        let mut task = String::new();
+        apply_log_line("[abc] Tool starting: read_file some/path", "abc", &mut status, &mut task);
+        assert_eq!(status, SessionStatus::Executing);
+        assert_eq!(task, "read_file");
+    }
+
+    #[test]
+    fn turn_ended_with_unrelated_tool_words_does_not_falsely_match_executing() {
+        // Regression: a summary line naming both "tool" and "call" as field
+        // labels (not an actual tool invocation) must not be read as an
+        // executing-tool event.
+        let mut status = SessionStatus::Thinking;
+        let mut task = String::new();
+        apply_log_line("[abc] Turn ended: tool_turns=0 api_calls=1/150", "abc", &mut status, &mut task);
+        assert_eq!(status, SessionStatus::Waiting);
+    }
+
+    #[test]
+    fn lines_for_a_different_session_id_are_ignored() {
+        let mut status = SessionStatus::Waiting;
+        let mut task = String::new();
+        apply_log_line("[other-session] Tool starting: read_file x", "abc", &mut status, &mut task);
+        assert_eq!(status, SessionStatus::Waiting);
+        assert!(task.is_empty());
+    }
+
+    #[test]
+    fn query_active_session_reads_the_most_recent_open_session() {
+        let dir = std::env::temp_dir().join(format!("utt-hermes-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db_path = dir.join("state.db");
+        let _ = std::fs::remove_file(&db_path);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER,
+                cache_read_tokens INTEGER, cache_write_tokens INTEGER, message_count INTEGER,
+                cwd TEXT, started_at REAL, ended_at REAL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions VALUES ('old', 'm1', 1, 1, 0, 0, 1, '/tmp/a', 100.0, 200.0)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO sessions VALUES ('new', 'm1', 5, 5, 0, 0, 2, '/tmp/b', 300.0, NULL)",
+            [],
+        ).unwrap();
+        drop(conn);
+
+        let active = query_active_session(&db_path).expect("should find the open session");
+        assert_eq!(active.id, "new");
+        assert_eq!(active.cwd, "/tmp/b");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn usage_limits_reads_hook_file_from_data_dir() {
+        let dir = std::env::temp_dir().join(format!("utt-hermes-quota-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(
+            dir.join("abtop-rate-limits.json"),
+            r#"{"five_hour": {"used_percentage": 33.0, "resets_at": 123}}"#,
+        ).unwrap();
+        let collector = HermesCollector::new(dir.clone());
+        let rl = collector.usage_limits().expect("should read the hook file");
+        assert_eq!(rl.five_hour_pct, Some(33.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
