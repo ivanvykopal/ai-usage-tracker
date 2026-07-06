@@ -56,6 +56,17 @@ impl App {
                 usage_limits.insert(name, rl);
             }
         }
+        // Populate cost estimates from the pricing table.
+        for s in &mut sessions {
+            s.cost_usd = crate::pricing::estimate_cost_usd(
+                &s.model,
+                s.total_input_tokens,
+                s.total_output_tokens,
+                s.total_cache_read,
+                s.total_cache_create,
+            );
+        }
+
         // Dedupe by (agent_cli, session_id); last one wins.
         sessions.sort_by(|a, b| {
             a.agent_cli
@@ -64,5 +75,48 @@ impl App {
         });
         sessions.dedup_by(|a, b| a.agent_cli == b.agent_cli && a.session_id == b.session_id);
         build_snapshot(sessions, usage_limits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AgentSession, SessionStatus};
+
+    struct FakeCollector;
+    impl Collector for FakeCollector {
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn collect(&mut self, _ctx: &ProcessContext) -> Vec<AgentSession> {
+            vec![AgentSession {
+                agent_cli: "claude".into(),
+                pid: 0,
+                session_id: "s1".into(),
+                cwd: String::new(),
+                project_name: String::new(),
+                started_at: 0,
+                status: SessionStatus::Waiting,
+                model: "claude-sonnet-4-20250514".into(),
+                context_percent: 0.0,
+                total_input_tokens: 1_000_000,
+                total_output_tokens: 0,
+                total_cache_read: 0,
+                total_cache_create: 0,
+                turn_count: 0,
+                current_task: String::new(),
+                mem_mb: 0,
+                cost_usd: None,
+            }]
+        }
+    }
+
+    #[test]
+    fn tick_populates_cost_usd_from_pricing_table() {
+        let mut app = App::new(vec![Box::new(FakeCollector)]);
+        let snapshot = app.tick();
+        assert_eq!(snapshot.sessions.len(), 1);
+        let cost = snapshot.sessions[0].cost_usd.expect("cost should be Some for a known model");
+        assert!((cost - 3.0).abs() < 1e-9);
     }
 }
