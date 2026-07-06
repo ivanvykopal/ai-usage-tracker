@@ -60,3 +60,4 @@ body { -webkit-user-select: none; user-select: none; }
 .usage-pct { opacity: 0.8; }
 .usage-bar { width: 40px; margin: 0; display: inline-block; }
 .usage-reset { opacity: 0.55; }
+#history-chart { width: 100%; display: block; padding: 2px 10px; opacity: 0.8; }

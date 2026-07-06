@@ -141,3 +141,37 @@ window.__TAURI__.event.listen("snapshot://update", (e) => {
   usageLimitsEl.innerHTML = renderUsageLimits(e.payload.usage_limits);
   content.innerHTML = renderSnapshot(e.payload);
 });
+
+const historyCanvas = document.getElementById("history-chart");
+const historyCtx = historyCanvas.getContext("2d");
+
+function drawSparkline(points) {
+  const w = historyCanvas.width = historyCanvas.clientWidth;
+  const h = historyCanvas.height;
+  historyCtx.clearRect(0, 0, w, h);
+  if (points.length < 2) return;
+  const values = points.map(p => p[1]);
+  const min = Math.min(...values);
+  const max = Math.max(...values, min + 1);
+  historyCtx.strokeStyle = "#6aa0ff";
+  historyCtx.lineWidth = 1.5;
+  historyCtx.beginPath();
+  points.forEach((p, i) => {
+    const x = (i / (points.length - 1)) * w;
+    const y = h - ((p[1] - min) / (max - min)) * h;
+    if (i === 0) historyCtx.moveTo(x, y);
+    else historyCtx.lineTo(x, y);
+  });
+  historyCtx.stroke();
+}
+
+async function refreshHistory() {
+  try {
+    const points = await window.__TAURI__.core.invoke("get_usage_history", { agent: "claude", hours: 6 });
+    drawSparkline(points);
+  } catch (e) {
+    // history disabled or db unavailable — leave the canvas blank.
+  }
+}
+refreshHistory();
+setInterval(refreshHistory, 60000);
