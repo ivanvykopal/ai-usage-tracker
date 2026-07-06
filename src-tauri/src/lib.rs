@@ -1,5 +1,4 @@
 pub mod app;
-pub mod claude;
 pub mod claude_usage;
 pub mod codex;
 pub mod collector;
@@ -62,36 +61,6 @@ fn quit(app: tauri::AppHandle) {
 
 fn build_collectors(cfg: &config::Config, home_dirs: &[home::HomeDir]) -> Vec<Box<dyn collector::Collector>> {
     let mut v: Vec<Box<dyn collector::Collector>> = Vec::new();
-
-    if cfg.enabled_agents.iter().any(|a| a == "claude") {
-        // Create a collector that checks all possible .claude directories
-        let claude_dirs: Vec<claude::ConfigDirEntry> = home_dirs
-            .iter()
-            .map(|h| claude::ConfigDirEntry {
-                dir: h.path.join(".claude"),
-                wsl_distro: h.wsl_distro.clone(),
-            })
-            .filter(|e| e.dir.exists())
-            .collect();
-
-        let usage_source = if cfg.claude_usage_enabled {
-            // Poll using the first resolved home directory's credentials
-            // file — accounts are per-user, so there's exactly one relevant
-            // OAuth token even when multiple .claude dirs are found (e.g.
-            // WSL + Windows both pointing at the same Anthropic account).
-            match claude_dirs.first() {
-                Some(first) => {
-                    let creds_path = first.dir.join(".credentials.json");
-                    claude::ClaudeUsageSource::ApiHandle(claude_usage::ClaudeUsagePoller::start(creds_path))
-                }
-                None => claude::ClaudeUsageSource::HookFileOnly,
-            }
-        } else {
-            claude::ClaudeUsageSource::HookFileOnly
-        };
-
-        v.push(Box::new(claude::ClaudeCollector::new_multi_with_usage(claude_dirs, usage_source)));
-    }
 
     if cfg.enabled_agents.iter().any(|a| a == "codex") {
         let codex_dirs: Vec<PathBuf> = home_dirs

@@ -1,4 +1,6 @@
 use crate::collector::{Collector, ProcessContext};
+use crate::config::Config;
+use crate::home::HomeDir;
 use crate::model::{AgentSession, SessionStatus};
 use crate::process::has_active_descendant;
 use crate::rate_limit::{self, CLAUDE_RATE_FILE};
@@ -459,4 +461,39 @@ fn parse_iso_to_ms(s: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.timestamp_millis())
+}
+
+/// Constructs the Claude collector if the `claude` provider is enabled in
+/// config and at least one `.claude` directory exists under a resolved home
+/// directory. Matches the interface every `providers::*` module implements —
+/// see `providers::ProviderEntry`.
+pub fn build(cfg: &Config, home_dirs: &[HomeDir]) -> Option<Box<dyn Collector>> {
+    let claude_dirs: Vec<ConfigDirEntry> = home_dirs
+        .iter()
+        .map(|h| ConfigDirEntry {
+            dir: h.path.join(".claude"),
+            wsl_distro: h.wsl_distro.clone(),
+        })
+        .filter(|e| e.dir.exists())
+        .collect();
+    if claude_dirs.is_empty() {
+        return None;
+    }
+
+    let usage_source = if cfg.claude_usage_enabled {
+        match claude_dirs.first() {
+            Some(first) => {
+                let creds_path = first.dir.join(".credentials.json");
+                ClaudeUsageSource::ApiHandle(crate::claude_usage::ClaudeUsagePoller::start(creds_path))
+            }
+            None => ClaudeUsageSource::HookFileOnly,
+        }
+    } else {
+        ClaudeUsageSource::HookFileOnly
+    };
+
+    Some(Box::new(ClaudeCollector::new_multi_with_usage(
+        claude_dirs,
+        usage_source,
+    )))
 }
