@@ -68,6 +68,16 @@ fn set_compact_view(window: tauri::Window, state: tauri::State<AppState>, compac
 }
 
 #[tauri::command]
+fn set_theme(window: tauri::Window, state: tauri::State<AppState>, theme: String, accent_color: String) {
+    if let Ok(mut cfg) = state.config.lock() {
+        cfg.theme = theme.clone();
+        cfg.accent_color = accent_color.clone();
+        let _ = config::save_config(&state.config_path, &cfg);
+    }
+    let _ = window.emit("theme://update", (theme, accent_color));
+}
+
+#[tauri::command]
 fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -192,6 +202,7 @@ pub fn run() {
             if let Some(w) = app_handle.get_webview_window("overlay") {
                 let _ = w.emit("opacity://update", cfg.opacity);
                 let _ = w.emit("compact://update", cfg.compact_view);
+                let _ = w.emit("theme://update", (cfg.theme.clone(), cfg.accent_color.clone()));
             }
 
             // Global hotkey: Ctrl+Shift+Space toggles visibility
@@ -299,7 +310,8 @@ pub fn run() {
             get_config,
             list_providers,
             set_enabled_agents,
-            set_compact_view
+            set_compact_view,
+            set_theme
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

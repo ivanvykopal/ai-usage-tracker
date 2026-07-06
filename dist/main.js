@@ -31,6 +31,8 @@ const settingsPanel = document.getElementById("settings");
 const opacitySlider = document.getElementById("opacity-slider");
 const pollIntervalInput = document.getElementById("poll-interval-input");
 const providerToggles = document.getElementById("provider-toggles");
+const themeSelect = document.getElementById("theme-select");
+const accentInput = document.getElementById("accent-input");
 
 settingsBtn.addEventListener("click", async () => {
   const willOpen = settingsPanel.classList.contains("hidden");
@@ -45,6 +47,8 @@ async function loadSettings() {
   ]);
   opacitySlider.value = cfg.opacity;
   pollIntervalInput.value = cfg.poll_interval_ms;
+  themeSelect.value = cfg.theme;
+  accentInput.value = cfg.accent_color;
   providerToggles.innerHTML = providers.map(([key, label]) => `
     <label class="settings-row">
       <input type="checkbox" data-provider="${key}" ${cfg.enabled_agents.includes(key) ? "checked" : ""} />
@@ -73,6 +77,18 @@ window.__TAURI__.event.listen("opacity://update", (e) => {
   panel.style.opacity = e.payload;
   opacitySlider.value = e.payload;
 });
+
+window.__TAURI__.event.listen("theme://update", (e) => {
+  const [theme, accent] = e.payload;
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.setProperty("--accent", accent);
+});
+
+function pushTheme() {
+  window.__TAURI__.core.invoke("set_theme", { theme: themeSelect.value, accentColor: accentInput.value });
+}
+themeSelect.addEventListener("change", pushTheme);
+accentInput.addEventListener("input", pushTheme);
 
 // Subscribe to snapshot updates
 const STATUS_LABEL = {

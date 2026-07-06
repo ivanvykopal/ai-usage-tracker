@@ -29,6 +29,14 @@ pub struct Config {
     /// per-token meta spans. Defaults to false (current expanded behavior).
     #[serde(default)]
     pub compact_view: bool,
+    /// UI theme name. "dark" or "light"; other values fall back to dark on
+    /// the frontend. Defaults to "dark".
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Hex accent color applied to the CSS --accent variable. Defaults to
+    /// the dark-theme blue.
+    #[serde(default = "default_accent_color")]
+    pub accent_color: String,
 }
 
 fn default_claude_usage_enabled() -> bool {
@@ -47,6 +55,14 @@ fn default_stall_alert_secs() -> u64 {
     180
 }
 
+fn default_theme() -> String {
+    "dark".to_string()
+}
+
+fn default_accent_color() -> String {
+    "#6aa0ff".to_string()
+}
+
 pub fn default_config() -> Config {
     Config {
         poll_interval_ms: 1000,
@@ -61,6 +77,8 @@ pub fn default_config() -> Config {
         history_retention_days: 30,
         stall_alert_secs: 180,
         compact_view: false,
+        theme: "dark".to_string(),
+        accent_color: "#6aa0ff".to_string(),
     }
 }
 
