@@ -18,6 +18,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_notification::NotificationExt;
 
 struct AppState {
     app: Mutex<app::App>,
@@ -114,6 +115,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -177,19 +179,38 @@ pub fn run() {
             // Tick thread
             let app_handle = app_handle.clone();
             std::thread::spawn(move || loop {
-                let interval = {
+                let (interval, stall_alert_secs) = {
                     let state: tauri::State<AppState> = app_handle.state();
-                    state
-                        .config
-                        .lock()
-                        .map(|c| c.poll_interval_ms)
-                        .unwrap_or(1000)
+                    let cfg = state.config.lock().unwrap();
+                    (cfg.poll_interval_ms, cfg.stall_alert_secs)
                 };
                 let mut snapshot = {
                     let state: tauri::State<AppState> = app_handle.state();
                     let mut a = state.app.lock().unwrap();
-                    a.tick()
+                    a.tick_with_threshold(stall_alert_secs, chrono::Utc::now().timestamp_millis())
                 };
+
+                static NOTIFIED: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+                let notified = NOTIFIED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+                if let Ok(mut notified) = notified.lock() {
+                    let stalled_keys: std::collections::HashSet<String> = snapshot
+                        .sessions
+                        .iter()
+                        .filter(|s| s.stalled)
+                        .map(|s| format!("{}:{}", s.agent_cli, s.session_id))
+                        .collect();
+                    for key in &stalled_keys {
+                        if notified.insert(key.clone()) {
+                            let _ = app_handle
+                                .notification()
+                                .builder()
+                                .title("AI assistant stalled")
+                                .body(format!("{key} has been thinking/executing longer than expected."))
+                                .show();
+                        }
+                    }
+                    notified.retain(|k| stalled_keys.contains(k));
+                }
                 {
                     let state: tauri::State<AppState> = app_handle.state();
                     if let Some(hconn) = &state.history_conn {

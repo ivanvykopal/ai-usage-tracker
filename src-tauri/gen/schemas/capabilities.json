@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capabilities for the AI Usage Overlay app","local":true,"windows":["overlay"],"permissions":["core:default","core:window:allow-start-dragging","global-shortcut:allow-register","global-shortcut:allow-unregister"]}}
+{"default":{"identifier":"default","description":"Default capabilities for the AI Usage Overlay app","local":true,"windows":["overlay"],"permissions":["core:default","core:window:allow-start-dragging","global-shortcut:allow-register","global-shortcut:allow-unregister","notification:default"]}}
