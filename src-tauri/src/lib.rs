@@ -5,6 +5,7 @@ pub mod config;
 pub mod history;
 pub mod home;
 pub mod model;
+pub mod pricing;
 pub mod process;
 pub mod providers;
 pub mod rate_limit;
