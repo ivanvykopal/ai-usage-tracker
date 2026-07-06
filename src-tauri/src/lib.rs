@@ -1,5 +1,6 @@
 pub mod app;
 pub mod claude;
+pub mod claude_usage;
 pub mod codex;
 pub mod collector;
 pub mod config;
@@ -162,7 +163,24 @@ fn build_collectors(cfg: &config::Config, home_dirs: &[HomeDir]) -> Vec<Box<dyn 
             })
             .filter(|e| e.dir.exists())
             .collect();
-        v.push(Box::new(claude::ClaudeCollector::new_multi(claude_dirs)));
+
+        let usage_source = if cfg.claude_usage_enabled {
+            // Poll using the first resolved home directory's credentials
+            // file — accounts are per-user, so there's exactly one relevant
+            // OAuth token even when multiple .claude dirs are found (e.g.
+            // WSL + Windows both pointing at the same Anthropic account).
+            match claude_dirs.first() {
+                Some(first) => {
+                    let creds_path = first.dir.join(".credentials.json");
+                    claude::ClaudeUsageSource::ApiHandle(claude_usage::ClaudeUsagePoller::start(creds_path))
+                }
+                None => claude::ClaudeUsageSource::HookFileOnly,
+            }
+        } else {
+            claude::ClaudeUsageSource::HookFileOnly
+        };
+
+        v.push(Box::new(claude::ClaudeCollector::new_multi_with_usage(claude_dirs, usage_source)));
     }
 
     if cfg.enabled_agents.iter().any(|a| a == "codex") {

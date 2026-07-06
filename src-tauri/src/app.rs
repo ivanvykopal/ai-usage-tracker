@@ -43,13 +43,18 @@ impl App {
             wsl: &wsl,
         };
         let mut sessions = Vec::new();
+        let mut usage_limits = std::collections::BTreeMap::new();
         for c in &mut self.collectors {
             // Catch a collector panic so one agent can't take down the tick loop.
+            let name = c.name().to_string();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.collect(&ctx)));
             if let Ok(s) = result {
                 sessions.extend(s);
             }
             // On panic: skip this collector this tick, keep going.
+            if let Ok(Some(rl)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.usage_limits())) {
+                usage_limits.insert(name, rl);
+            }
         }
         // Dedupe by (agent_cli, session_id); last one wins.
         sessions.sort_by(|a, b| {
@@ -58,6 +63,6 @@ impl App {
                 .then_with(|| a.session_id.cmp(&b.session_id))
         });
         sessions.dedup_by(|a, b| a.agent_cli == b.agent_cli && a.session_id == b.session_id);
-        build_snapshot(sessions)
+        build_snapshot(sessions, usage_limits)
     }
 }

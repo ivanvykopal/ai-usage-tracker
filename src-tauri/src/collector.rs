@@ -88,4 +88,11 @@ pub fn context_percent_for(model: &str, configured_model: &str, used_tokens: u64
 pub trait Collector: Send {
     fn name(&self) -> &str;
     fn collect(&mut self, ctx: &ProcessContext) -> Vec<AgentSession>;
+
+    /// Account-level 5h/weekly usage, if this collector has any. Called once
+    /// per tick after `collect()`. Default `None` — only Claude and Codex
+    /// currently report this.
+    fn usage_limits(&self) -> Option<crate::model::RateLimitInfo> {
+        None
+    }
 }

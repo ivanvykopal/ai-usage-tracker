@@ -10,6 +10,17 @@ pub struct Config {
     pub hotkey: String,
     pub enabled_agents: Vec<String>,
     pub hermes_data_dir: Option<PathBuf>,
+    /// When `true` (default), Claude's 5h/weekly usage is fetched directly
+    /// from Anthropic's usage API using the OAuth token already stored by
+    /// Claude Code — the one network call this app makes. Set `false` to
+    /// keep the app strictly local-only; Claude usage then only populates
+    /// via the `abtop-rate-limits.json` hook file, if configured.
+    #[serde(default = "default_claude_usage_enabled")]
+    pub claude_usage_enabled: bool,
+}
+
+fn default_claude_usage_enabled() -> bool {
+    true
 }
 
 pub fn default_config() -> Config {
@@ -21,6 +32,7 @@ pub fn default_config() -> Config {
         hotkey: "Ctrl+Shift+Space".to_string(),
         enabled_agents: vec!["claude".into(), "codex".into(), "hermes".into()],
         hermes_data_dir: None,
+        claude_usage_enabled: true,
     }
 }
 

@@ -39,3 +39,38 @@ fn tempfile_dir(test_name: &str) -> std::path::PathBuf {
     let _ = fs::create_dir_all(&dir);
     dir
 }
+
+#[test]
+fn claude_usage_enabled_defaults_true() {
+    let cfg = load_config(std::path::Path::new("/nonexistent/config.toml"));
+    assert!(cfg.claude_usage_enabled);
+}
+
+#[test]
+fn claude_usage_enabled_can_be_disabled_and_round_trips() {
+    let dir = tempfile_dir("claude_usage_disabled");
+    let path = dir.join("config.toml");
+    let mut cfg = default_config();
+    cfg.claude_usage_enabled = false;
+    save_config(&path, &cfg).unwrap();
+    let loaded = load_config(&path);
+    assert!(!loaded.claude_usage_enabled);
+}
+
+#[test]
+fn old_config_file_without_claude_usage_enabled_defaults_true() {
+    let dir = tempfile_dir("legacy_config");
+    let path = dir.join("config.toml");
+    fs::write(
+        &path,
+        r#"
+poll_interval_ms = 1000
+opacity = 1.0
+hotkey = "Ctrl+Shift+Space"
+enabled_agents = ["claude", "codex"]
+"#,
+    )
+    .unwrap();
+    let cfg = load_config(&path);
+    assert!(cfg.claude_usage_enabled, "missing field in an old config file must default to true, not fail to parse");
+}

@@ -8,6 +8,18 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// Where `ClaudeCollector` gets account-level 5h/weekly usage from.
+#[derive(Clone)]
+pub enum ClaudeUsageSource {
+    /// Shared handle updated by `claude_usage::ClaudeUsagePoller`'s
+    /// background thread. Preferred when it has data.
+    ApiHandle(Arc<Mutex<Option<crate::model::RateLimitInfo>>>),
+    /// No API poller running (e.g. `claude_usage_enabled = false` in config)
+    /// — read only from the hook file.
+    HookFileOnly,
+}
 
 /// On-disk `~/.claude/sessions/{pid}.json` header.
 #[derive(Debug, Deserialize)]
@@ -45,6 +57,7 @@ pub struct ClaudeCollector {
     config_dirs: Vec<ConfigDirEntry>,
     readers: HashMap<String, IncrementalReader>,
     state: HashMap<String, ParseState>,
+    usage_source: ClaudeUsageSource,
 }
 
 /// Resolve the project directory that holds a session's transcripts.
@@ -104,13 +117,21 @@ impl ClaudeCollector {
         }])
     }
 
-    /// Create a collector that checks multiple configuration directories.
-    /// This is useful for detecting sessions in both WSL and Windows environments.
+    /// Create a collector that checks multiple configuration directories,
+    /// with no API-based usage source (hook file only). This is useful for
+    /// detecting sessions in both WSL and Windows environments.
     pub fn new_multi(config_dirs: Vec<ConfigDirEntry>) -> Self {
+        Self::new_multi_with_usage(config_dirs, ClaudeUsageSource::HookFileOnly)
+    }
+
+    /// Create a collector with an explicit usage source — used by
+    /// `lib.rs::build_collectors` to wire in the live API poller handle.
+    pub fn new_multi_with_usage(config_dirs: Vec<ConfigDirEntry>, usage_source: ClaudeUsageSource) -> Self {
         Self {
             config_dirs,
             readers: HashMap::new(),
             state: HashMap::new(),
+            usage_source,
         }
     }
 }
@@ -129,9 +150,6 @@ impl Collector for ClaudeCollector {
             let config_dir = &entry.dir;
             let (procs, children) = ctx.procs_for(entry.wsl_distro.as_deref());
             let sessions_dir = config_dir.join("sessions");
-            // Account-level, so read once and share across every Claude session this tick.
-            let rate_limit =
-                rate_limit::read_rate_limit_file(&config_dir.join(CLAUDE_RATE_FILE), "claude");
 
             let entries = match fs::read_dir(&sessions_dir) {
                 Ok(e) => e,
@@ -211,7 +229,6 @@ impl Collector for ClaudeCollector {
                     turn_count: 0,
                     current_task: st.current_task.clone(),
                     mem_mb,
-                    rate_limit: rate_limit.clone(),
                 });
             }
         }
@@ -223,6 +240,22 @@ impl Collector for ClaudeCollector {
 
         out.sort_by_key(|s| std::cmp::Reverse(s.started_at));
         out
+    }
+
+    fn usage_limits(&self) -> Option<crate::model::RateLimitInfo> {
+        if let ClaudeUsageSource::ApiHandle(handle) = &self.usage_source {
+            if let Ok(guard) = handle.lock() {
+                if guard.is_some() {
+                    return guard.clone();
+                }
+            }
+        }
+        // Fall back to the hook file — either the API source has no data
+        // yet (still starting up, or no OAuth token / Bedrock-Vertex auth),
+        // or usage is configured to be hook-file-only.
+        self.config_dirs.iter().find_map(|entry| {
+            rate_limit::read_rate_limit_file(&entry.dir.join(CLAUDE_RATE_FILE), "claude")
+        })
     }
 }
 

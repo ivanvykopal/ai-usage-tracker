@@ -33,10 +33,13 @@ fn empty_ctx() -> ProcessContext<'static> {
     let procs = EMPTY_PROCS.get_or_init(HashMap::new);
     let kids = EMPTY_KIDS.get_or_init(HashMap::new);
     let ports = EMPTY_PORTS.get_or_init(HashMap::new);
+    static EMPTY_WSL: OnceLock<HashMap<String, usage_tracker::process::ProcessSnapshot>> = OnceLock::new();
+    let wsl = EMPTY_WSL.get_or_init(HashMap::new);
     ProcessContext {
         procs,
         children: kids,
         ports,
+        wsl,
     }
 }
 
@@ -67,6 +70,7 @@ fn collects_session_with_accumulated_tokens_and_project_name() {
         procs: &procs,
         children: &kids,
         ports: &ports,
+        wsl: &HashMap::new(),
     };
 
     let mut c = ClaudeCollector::new(root);
@@ -108,6 +112,7 @@ fn synthetic_user_messages_do_not_pin_thinking_status() {
         procs: &procs,
         children: &kids,
         ports: &ports,
+        wsl: &HashMap::new(),
     };
 
     let mut c = ClaudeCollector::new(root);
@@ -125,4 +130,65 @@ fn dead_pid_session_is_dropped() {
         sessions.is_empty(),
         "session whose pid is not alive must be dropped"
     );
+}
+
+use usage_tracker::claude::ClaudeUsageSource;
+use usage_tracker::model::RateLimitInfo;
+
+#[test]
+fn falls_back_to_hook_file_when_api_poller_has_no_data() {
+    let root = build_fake_claude_root("hook_fallback");
+    fs::write(
+        root.join("abtop-rate-limits.json"),
+        r#"{"five_hour":{"used_percentage":55.0,"resets_at":1700000000},"seven_day":{"used_percentage":10.0,"resets_at":1700500000}}"#,
+    )
+    .unwrap();
+    let mut procs = HashMap::new();
+    procs.insert(
+        4242,
+        ProcInfo { pid: 4242, command: "claude".into(), rss_kb: 50_000, cpu: 0.0, parent_pid: None },
+    );
+    let ctx = ProcessContext { procs: &procs, children: &HashMap::new(), ports: &HashMap::new(), wsl: &HashMap::new() };
+
+    let usage_source = ClaudeUsageSource::ApiHandle(std::sync::Arc::new(std::sync::Mutex::new(None)));
+    let mut c = usage_tracker::claude::ClaudeCollector::new_multi_with_usage(
+        vec![usage_tracker::claude::ConfigDirEntry { dir: root, wsl_distro: None }],
+        usage_source,
+    );
+    let _ = c.collect(&ctx);
+    let rl = c.usage_limits().expect("hook file should be used as fallback");
+    assert_eq!(rl.five_hour_pct, Some(55.0));
+}
+
+#[test]
+fn prefers_api_handle_data_over_hook_file() {
+    let root = build_fake_claude_root("api_precedence");
+    fs::write(
+        root.join("abtop-rate-limits.json"),
+        r#"{"five_hour":{"used_percentage":55.0,"resets_at":1700000000}}"#,
+    )
+    .unwrap();
+    let mut procs = HashMap::new();
+    procs.insert(
+        4242,
+        ProcInfo { pid: 4242, command: "claude".into(), rss_kb: 50_000, cpu: 0.0, parent_pid: None },
+    );
+    let ctx = ProcessContext { procs: &procs, children: &HashMap::new(), ports: &HashMap::new(), wsl: &HashMap::new() };
+
+    let api_value = RateLimitInfo {
+        source: "claude".into(),
+        five_hour_pct: Some(7.0),
+        five_hour_resets_at: Some(1),
+        seven_day_pct: None,
+        seven_day_resets_at: None,
+        updated_at: Some(1),
+    };
+    let usage_source = ClaudeUsageSource::ApiHandle(std::sync::Arc::new(std::sync::Mutex::new(Some(api_value))));
+    let mut c = usage_tracker::claude::ClaudeCollector::new_multi_with_usage(
+        vec![usage_tracker::claude::ConfigDirEntry { dir: root, wsl_distro: None }],
+        usage_source,
+    );
+    let _ = c.collect(&ctx);
+    let rl = c.usage_limits().expect("api handle should provide usage");
+    assert_eq!(rl.five_hour_pct, Some(7.0));
 }
