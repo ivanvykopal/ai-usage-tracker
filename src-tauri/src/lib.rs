@@ -1,4 +1,5 @@
 pub mod app;
+pub mod burn_rate;
 pub mod claude_usage;
 pub mod collector;
 pub mod config;
