@@ -2,6 +2,7 @@ const panel = document.getElementById("panel");
 const content = document.getElementById("content");
 const titlebar = document.getElementById("titlebar");
 const hideBtn = document.getElementById("hide-btn");
+const usageLimitsEl = document.getElementById("usage-limits");
 
 // Drag via the title bar using Tauri's native startDragging
 titlebar.addEventListener("mousedown", () => {
@@ -46,13 +47,6 @@ function renderSnapshot(s) {
   }
   const rows = s.sessions.map(sess => {
     const bar = Math.min(100, Math.round(sess.context_percent || 0));
-    const rl = sess.rate_limit;
-    const rateLimitRow = rl
-      ? `<div class="rate-limit">
-          ${rl.five_hour_pct != null ? `<span>5h ${Math.round(rl.five_hour_pct)}%</span>` : ""}
-          ${rl.seven_day_pct != null ? `<span>week ${Math.round(rl.seven_day_pct)}%</span>` : ""}
-        </div>`
-      : "";
     const usage = (sess.total_input_tokens || 0)
       + (sess.total_output_tokens || 0)
       + (sess.total_cache_read || 0)
@@ -83,7 +77,6 @@ function renderSnapshot(s) {
           <span>${sess.mem_mb || 0}MB</span>
           <span class="task">${escapeHtml(sess.current_task || "")}</span>
         </div>
-        ${rateLimitRow}
       </div>`;
   }).join("");
   const totalTokens = s.total_tokens || 0;
@@ -92,6 +85,50 @@ function renderSnapshot(s) {
           <div class="footer">total ${fmt(totalTokens)} tok &#183; ${liveCount} live</div>`;
 }
 
+const AGENT_LABEL = { claude: "Claude", codex: "Codex", hermes: "Hermes" };
+
+function fmtCountdown(resetsAtSecs) {
+  if (resetsAtSecs == null) return null;
+  const ms = resetsAtSecs * 1000 - Date.now();
+  if (ms <= 0) return "now";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) {
+    const remMins = mins % 60;
+    return remMins ? `${hours}h${remMins}m` : `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function renderUsageWindow(label, pct, resetsAt) {
+  if (pct == null) return `<span>${label} —</span>`;
+  const clamped = Math.min(100, Math.max(0, Math.round(pct)));
+  const countdown = fmtCountdown(resetsAt);
+  return `<span class="usage-window">
+      ${label} <span class="usage-pct">${clamped}%</span>
+      <span class="bar usage-bar"><span class="bar-fill" style="width:${clamped}%"></span></span>
+      ${countdown ? `<span class="usage-reset">resets ${countdown}</span>` : ""}
+    </span>`;
+}
+
+function renderUsageLimits(usageLimits) {
+  const agents = Object.keys(usageLimits || {});
+  if (agents.length === 0) return "";
+  const rows = agents.map(agent => {
+    const rl = usageLimits[agent];
+    const label = AGENT_LABEL[agent] || agent;
+    return `<div class="usage-row">
+        <span class="usage-agent">${escapeHtml(label)}</span>
+        ${renderUsageWindow("5h", rl.five_hour_pct, rl.five_hour_resets_at)}
+        ${renderUsageWindow("week", rl.seven_day_pct, rl.seven_day_resets_at)}
+      </div>`;
+  }).join("");
+  return rows;
+}
+
 window.__TAURI__.event.listen("snapshot://update", (e) => {
+  usageLimitsEl.innerHTML = renderUsageLimits(e.payload.usage_limits);
   content.innerHTML = renderSnapshot(e.payload);
 });
