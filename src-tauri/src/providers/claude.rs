@@ -232,6 +232,7 @@ impl Collector for ClaudeCollector {
                     current_task: st.current_task.clone(),
                     mem_mb,
                     cost_usd: None,
+                    stalled: false,
                 });
             }
         }

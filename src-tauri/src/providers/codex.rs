@@ -204,6 +204,7 @@ impl Collector for CodexCollector {
                     current_task: st.current_task.clone(),
                     mem_mb: 0,
                     cost_usd: None,
+                    stalled: false,
                 });
             }
         }

@@ -33,6 +33,11 @@ pub struct AgentSession {
     /// isn't in `pricing::TABLE`. Populated by `App::tick` after `collect()`,
     /// not by individual collectors — see `pricing::estimate_cost_usd`.
     pub cost_usd: Option<f64>,
+    /// `true` once this session has stayed in `Thinking`/`Executing` longer
+    /// than `Config.stall_alert_secs`. Recomputed every tick by `App`, not by
+    /// individual collectors — a collector has no cross-tick memory of "how
+    /// long has this session's status been unchanged."
+    pub stalled: bool,
 }
 
 /// Account-level usage-limit windows, ported from abtop's `RateLimitInfo`.
