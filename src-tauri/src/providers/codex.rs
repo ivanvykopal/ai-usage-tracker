@@ -1,4 +1,6 @@
 use crate::collector::{Collector, ProcessContext};
+use crate::config::Config;
+use crate::home::HomeDir;
 use crate::model::{AgentSession, RateLimitInfo, SessionStatus};
 use crate::transcript::IncrementalReader;
 use serde_json::Value;
@@ -201,6 +203,8 @@ impl Collector for CodexCollector {
                     turn_count: 0,
                     current_task: st.current_task.clone(),
                     mem_mb: 0,
+                    cost_usd: None,
+                    stalled: false,
                 });
             }
         }
@@ -465,4 +469,16 @@ fn is_recent(path: &Path, max_age_secs: u64) -> bool {
         .duration_since(m)
         .unwrap_or(Duration::ZERO);
     age.as_secs() <= max_age_secs
+}
+
+pub fn build(_cfg: &Config, home_dirs: &[HomeDir]) -> Option<Box<dyn Collector>> {
+    let codex_dirs: Vec<std::path::PathBuf> = home_dirs
+        .iter()
+        .map(|h| h.path.join(".codex").join("sessions"))
+        .filter(|p| p.exists())
+        .collect();
+    if codex_dirs.is_empty() {
+        return None;
+    }
+    Some(Box::new(CodexCollector::new_multi(codex_dirs)))
 }

@@ -29,6 +29,15 @@ pub struct AgentSession {
     pub turn_count: u32,
     pub current_task: String,
     pub mem_mb: u64,
+    /// USD cost estimate for this session's tokens, or `None` if the model
+    /// isn't in `pricing::TABLE`. Populated by `App::tick` after `collect()`,
+    /// not by individual collectors — see `pricing::estimate_cost_usd`.
+    pub cost_usd: Option<f64>,
+    /// `true` once this session has stayed in `Thinking`/`Executing` longer
+    /// than `Config.stall_alert_secs`. Recomputed every tick by `App`, not by
+    /// individual collectors — a collector has no cross-tick memory of "how
+    /// long has this session's status been unchanged."
+    pub stalled: bool,
 }
 
 /// Account-level usage-limit windows, ported from abtop's `RateLimitInfo`.
@@ -49,6 +58,19 @@ pub struct RateLimitInfo {
     pub monthly_pct: Option<f64>,
     pub monthly_resets_at: Option<u64>,
     pub updated_at: Option<u64>,
+    /// Estimated milliseconds until this window hits 100%, from
+    /// `burn_rate::project_time_to_limit` over the last hour of samples in
+    /// `history.db`. `None` when history is disabled, there's not enough data
+    /// yet, or usage isn't trending upward.
+    pub five_hour_eta_ms: Option<i64>,
+    pub seven_day_eta_ms: Option<i64>,
+    pub monthly_eta_ms: Option<i64>,
+    /// True when a live data source exists (e.g. Claude's usage-API poller)
+    /// but hasn't produced its first result yet, and there's no hook-file
+    /// fallback data either — lets the frontend show "loading" instead of
+    /// silently omitting the row until the first fetch completes.
+    #[serde(default)]
+    pub loading: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +80,8 @@ pub struct Snapshot {
     pub by_agent_tokens: HashMap<String, u64>,
     pub by_status: HashMap<SessionStatus, u32>,
     pub usage_limits: BTreeMap<String, RateLimitInfo>,
+    pub total_cost_usd: f64,
+    pub by_agent_cost_usd: HashMap<String, f64>,
 }
 
 pub fn build_snapshot(
@@ -67,6 +91,8 @@ pub fn build_snapshot(
     let mut total_tokens: u64 = 0;
     let mut by_agent_tokens: HashMap<String, u64> = HashMap::new();
     let mut by_status: HashMap<SessionStatus, u32> = HashMap::new();
+    let mut total_cost_usd: f64 = 0.0;
+    let mut by_agent_cost_usd: HashMap<String, f64> = HashMap::new();
     // Pre-populate all statuses to ensure every variant has an entry
     by_status.insert(SessionStatus::Waiting, 0);
     by_status.insert(SessionStatus::Thinking, 0);
@@ -74,10 +100,17 @@ pub fn build_snapshot(
     by_status.insert(SessionStatus::Done, 0);
     by_status.insert(SessionStatus::Unknown, 0);
     for s in &sessions {
-        let t = s.total_input_tokens + s.total_output_tokens;
+        let t = s.total_input_tokens
+            + s.total_output_tokens
+            + s.total_cache_read
+            + s.total_cache_create;
         total_tokens += t;
         *by_agent_tokens.entry(s.agent_cli.clone()).or_insert(0) += t;
         *by_status.entry(s.status).or_insert(0) += 1;
+        if let Some(cost) = s.cost_usd {
+            total_cost_usd += cost;
+            *by_agent_cost_usd.entry(s.agent_cli.clone()).or_insert(0.0) += cost;
+        }
     }
     Snapshot {
         sessions,
@@ -85,5 +118,7 @@ pub fn build_snapshot(
         by_agent_tokens,
         by_status,
         usage_limits,
+        total_cost_usd,
+        by_agent_cost_usd,
     }
 }

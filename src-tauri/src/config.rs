@@ -17,10 +17,54 @@ pub struct Config {
     /// via the `abtop-rate-limits.json` hook file, if configured.
     #[serde(default = "default_claude_usage_enabled")]
     pub claude_usage_enabled: bool,
+    #[serde(default = "default_history_enabled")]
+    pub history_enabled: bool,
+    #[serde(default = "default_history_retention_days")]
+    pub history_retention_days: u32,
+    /// Seconds a session may stay in `Thinking` or `Executing` before it's
+    /// flagged `stalled` and (once) notified about. `0` disables the feature.
+    #[serde(default = "default_stall_alert_secs")]
+    pub stall_alert_secs: u64,
+    /// When true, render each session row in a compact form that hides most
+    /// per-token meta spans. Defaults to true — the detailed view is opt-in.
+    #[serde(default = "default_compact_view")]
+    pub compact_view: bool,
+    /// UI theme name. "dark" or "light"; other values fall back to dark on
+    /// the frontend. Defaults to "dark".
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Hex accent color applied to the CSS --accent variable. Defaults to
+    /// the dark-theme blue.
+    #[serde(default = "default_accent_color")]
+    pub accent_color: String,
 }
 
 fn default_claude_usage_enabled() -> bool {
     true
+}
+
+fn default_history_enabled() -> bool {
+    true
+}
+
+fn default_history_retention_days() -> u32 {
+    30
+}
+
+fn default_stall_alert_secs() -> u64 {
+    180
+}
+
+fn default_compact_view() -> bool {
+    true
+}
+
+fn default_theme() -> String {
+    "dark".to_string()
+}
+
+fn default_accent_color() -> String {
+    "#6aa0ff".to_string()
 }
 
 pub fn default_config() -> Config {
@@ -33,6 +77,12 @@ pub fn default_config() -> Config {
         enabled_agents: vec!["claude".into(), "codex".into(), "hermes".into()],
         hermes_data_dir: None,
         claude_usage_enabled: true,
+        history_enabled: true,
+        history_retention_days: 30,
+        stall_alert_secs: 180,
+        compact_view: true,
+        theme: "dark".to_string(),
+        accent_color: "#6aa0ff".to_string(),
     }
 }
 

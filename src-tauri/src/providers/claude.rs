@@ -1,4 +1,6 @@
 use crate::collector::{Collector, ProcessContext};
+use crate::config::Config;
+use crate::home::HomeDir;
 use crate::model::{AgentSession, SessionStatus};
 use crate::process::has_active_descendant;
 use crate::rate_limit::{self, CLAUDE_RATE_FILE};
@@ -229,6 +231,8 @@ impl Collector for ClaudeCollector {
                     turn_count: 0,
                     current_task: st.current_task.clone(),
                     mem_mb,
+                    cost_usd: None,
+                    stalled: false,
                 });
             }
         }
@@ -243,6 +247,7 @@ impl Collector for ClaudeCollector {
     }
 
     fn usage_limits(&self) -> Option<crate::model::RateLimitInfo> {
+        let is_api_source = matches!(self.usage_source, ClaudeUsageSource::ApiHandle(_));
         if let ClaudeUsageSource::ApiHandle(handle) = &self.usage_source {
             if let Ok(guard) = handle.lock() {
                 if guard.is_some() {
@@ -253,9 +258,22 @@ impl Collector for ClaudeCollector {
         // Fall back to the hook file — either the API source has no data
         // yet (still starting up, or no OAuth token / Bedrock-Vertex auth),
         // or usage is configured to be hook-file-only.
-        self.config_dirs.iter().find_map(|entry| {
+        if let Some(rl) = self.config_dirs.iter().find_map(|entry| {
             rate_limit::read_rate_limit_file(&entry.dir.join(CLAUDE_RATE_FILE), "claude")
-        })
+        }) {
+            return Some(rl);
+        }
+        // The API poller exists and just hasn't completed its first fetch
+        // yet — surface a "loading" placeholder instead of omitting the row,
+        // so it doesn't look like Claude has no usage tracking at all.
+        if is_api_source {
+            return Some(crate::model::RateLimitInfo {
+                source: "claude".to_string(),
+                loading: true,
+                ..Default::default()
+            });
+        }
+        None
     }
 }
 
@@ -459,4 +477,39 @@ fn parse_iso_to_ms(s: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.timestamp_millis())
+}
+
+/// Constructs the Claude collector if the `claude` provider is enabled in
+/// config and at least one `.claude` directory exists under a resolved home
+/// directory. Matches the interface every `providers::*` module implements —
+/// see `providers::ProviderEntry`.
+pub fn build(cfg: &Config, home_dirs: &[HomeDir]) -> Option<Box<dyn Collector>> {
+    let claude_dirs: Vec<ConfigDirEntry> = home_dirs
+        .iter()
+        .map(|h| ConfigDirEntry {
+            dir: h.path.join(".claude"),
+            wsl_distro: h.wsl_distro.clone(),
+        })
+        .filter(|e| e.dir.exists())
+        .collect();
+    if claude_dirs.is_empty() {
+        return None;
+    }
+
+    let usage_source = if cfg.claude_usage_enabled {
+        match claude_dirs.first() {
+            Some(first) => {
+                let creds_path = first.dir.join(".credentials.json");
+                ClaudeUsageSource::ApiHandle(crate::claude_usage::ClaudeUsagePoller::start(creds_path))
+            }
+            None => ClaudeUsageSource::HookFileOnly,
+        }
+    } else {
+        ClaudeUsageSource::HookFileOnly
+    };
+
+    Some(Box::new(ClaudeCollector::new_multi_with_usage(
+        claude_dirs,
+        usage_source,
+    )))
 }

@@ -79,6 +79,7 @@ pub fn parse_usage_response(body: &str) -> Option<RateLimitInfo> {
         monthly_pct: None,
         monthly_resets_at: None,
         updated_at: Some(now),
+        ..Default::default()
     })
 }
 

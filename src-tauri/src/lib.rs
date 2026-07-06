@@ -1,12 +1,14 @@
 pub mod app;
-pub mod claude;
+pub mod burn_rate;
 pub mod claude_usage;
-pub mod codex;
 pub mod collector;
 pub mod config;
-pub mod hermes;
+pub mod history;
+pub mod home;
 pub mod model;
+pub mod pricing;
 pub mod process;
+pub mod providers;
 pub mod rate_limit;
 pub mod transcript;
 
@@ -16,11 +18,14 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_notification::NotificationExt;
 
 struct AppState {
     app: Mutex<app::App>,
     config: Mutex<config::Config>,
     config_path: PathBuf,
+    history_conn: Option<Mutex<rusqlite::Connection>>,
+    home_dirs: Vec<home::HomeDir>,
 }
 
 #[tauri::command]
@@ -54,172 +59,67 @@ fn set_poll_interval(state: tauri::State<AppState>, ms: u64) {
 }
 
 #[tauri::command]
+fn set_compact_view(window: tauri::Window, state: tauri::State<AppState>, compact: bool) {
+    if let Ok(mut cfg) = state.config.lock() {
+        cfg.compact_view = compact;
+        let _ = config::save_config(&state.config_path, &cfg);
+    }
+    let _ = window.emit("compact://update", compact);
+}
+
+#[tauri::command]
+fn set_theme(window: tauri::Window, state: tauri::State<AppState>, theme: String, accent_color: String) {
+    if let Ok(mut cfg) = state.config.lock() {
+        cfg.theme = theme.clone();
+        cfg.accent_color = accent_color.clone();
+        let _ = config::save_config(&state.config_path, &cfg);
+    }
+    let _ = window.emit("theme://update", (theme, accent_color));
+}
+
+#[tauri::command]
 fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-/// A resolved home directory plus which WSL distro it came from, if any.
-/// `wsl_distro` is `None` for the native host's own home directory; it's
-/// `Some(name)` for a home directory reached through `\\wsl$\<name>\...` on
-/// native Windows. Collectors use this to know when a session's pid must be
-/// checked against that distro's own process list instead of the host's.
-struct HomeDir {
-    path: PathBuf,
-    wsl_distro: Option<String>,
+#[tauri::command]
+fn get_usage_history(state: tauri::State<AppState>, agent: String, hours: u32) -> Vec<(i64, u64)> {
+    let Some(hconn) = &state.history_conn else {
+        return Vec::new();
+    };
+    let Ok(guard) = hconn.lock() else {
+        return Vec::new();
+    };
+    let since_ms = chrono::Utc::now().timestamp_millis() - (hours as i64) * 3_600_000;
+    history::token_history(&guard, &agent, since_ms)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| (p.ts_ms, p.tokens))
+        .collect()
 }
 
-/// Resolve all possible home directories for agent data.
-/// In WSL, this includes both the WSL home and the Windows home (via /mnt/c).
-/// On Windows, this includes both the Windows home and WSL homes (via wsl.exe).
-/// This allows detecting Claude/Codex/Hermes sessions running in either environment.
-fn resolve_home_dirs() -> Vec<HomeDir> {
-    let mut dirs = Vec::new();
-
-    // Always add the primary home directory (platform-specific)
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(HomeDir {
-            path: home,
-            wsl_distro: None,
-        });
-    }
-
-    // Check if we're in WSL
-    let is_wsl = std::fs::read_to_string("/proc/version")
-        .map(|v| v.to_lowercase().contains("microsoft"))
-        .unwrap_or(false);
-
-    if is_wsl {
-        // We're in WSL - also check the Windows home directory
-        // WSL typically mounts Windows drives under /mnt/[drive-letter]
-        if let Some(username) = std::env::var("USER")
-            .ok()
-            .or_else(|| std::env::var("LOGNAME").ok())
-        {
-            let windows_home = PathBuf::from("/mnt/c").join("Users").join(&username);
-            if windows_home.exists() && !dirs.iter().any(|h: &HomeDir| h.path == windows_home) {
-                dirs.push(HomeDir {
-                    path: windows_home,
-                    wsl_distro: None,
-                });
-            }
-        }
-    } else {
-        // We're on native Windows - check for WSL home directories
-        // Try to discover WSL distributions and their users
-        if let Ok(output) = process::silent_command("wsl")
-            .args(["-l", "-q"])
-            .output()
-        {
-            let wsl_distributions = process::decode_wsl_output(&output.stdout);
-            for dist in wsl_distributions.lines() {
-                // wsl -l -q can emit a UTF-16 BOM as the first character of
-                // the first line even after decoding; strip it defensively.
-                let dist = dist.trim().trim_start_matches('\u{feff}');
-                if dist.is_empty() {
-                    continue;
-                }
-
-                // Get the default user for this distribution
-                if let Ok(user_output) = process::silent_command("wsl")
-                    .args(["-d", dist, "sh", "-c", "echo $HOME"])
-                    .output()
-                {
-                    let home_path = process::decode_wsl_output(&user_output.stdout)
-                        .trim()
-                        .to_string();
-                    // Convert WSL path like /home/username to Windows path
-                    if let Some(username) = home_path.strip_prefix("/home/") {
-                        let windows_wsl_home = PathBuf::from("\\\\wsl$")
-                            .join(dist)
-                            .join("home")
-                            .join(username);
-                        if windows_wsl_home.exists()
-                            && !dirs.iter().any(|h: &HomeDir| h.path == windows_wsl_home)
-                        {
-                            dirs.push(HomeDir {
-                                path: windows_wsl_home,
-                                wsl_distro: Some(dist.to_string()),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    dirs
+#[tauri::command]
+fn get_config(state: tauri::State<AppState>) -> config::Config {
+    state.config.lock().unwrap().clone()
 }
 
-fn build_collectors(cfg: &config::Config, home_dirs: &[HomeDir]) -> Vec<Box<dyn collector::Collector>> {
-    let mut v: Vec<Box<dyn collector::Collector>> = Vec::new();
-
-    if cfg.enabled_agents.iter().any(|a| a == "claude") {
-        // Create a collector that checks all possible .claude directories
-        let claude_dirs: Vec<claude::ConfigDirEntry> = home_dirs
-            .iter()
-            .map(|h| claude::ConfigDirEntry {
-                dir: h.path.join(".claude"),
-                wsl_distro: h.wsl_distro.clone(),
-            })
-            .filter(|e| e.dir.exists())
-            .collect();
-
-        let usage_source = if cfg.claude_usage_enabled {
-            // Poll using the first resolved home directory's credentials
-            // file — accounts are per-user, so there's exactly one relevant
-            // OAuth token even when multiple .claude dirs are found (e.g.
-            // WSL + Windows both pointing at the same Anthropic account).
-            match claude_dirs.first() {
-                Some(first) => {
-                    let creds_path = first.dir.join(".credentials.json");
-                    claude::ClaudeUsageSource::ApiHandle(claude_usage::ClaudeUsagePoller::start(creds_path))
-                }
-                None => claude::ClaudeUsageSource::HookFileOnly,
-            }
-        } else {
-            claude::ClaudeUsageSource::HookFileOnly
-        };
-
-        v.push(Box::new(claude::ClaudeCollector::new_multi_with_usage(claude_dirs, usage_source)));
-    }
-
-    if cfg.enabled_agents.iter().any(|a| a == "codex") {
-        let codex_dirs: Vec<PathBuf> = home_dirs
-            .iter()
-            .map(|h| h.path.join(".codex").join("sessions"))
-            .filter(|p| p.exists())
-            .collect();
-        v.push(Box::new(codex::CodexCollector::new_multi(codex_dirs)));
-    }
-
-    if cfg.enabled_agents.iter().any(|a| a == "hermes") {
-        // HERMES_HOME defaults to ~/.hermes; only override via config.
-        let hermes_dirs: Vec<PathBuf> = if let Some(ref custom_dir) = cfg.hermes_data_dir {
-            vec![custom_dir.clone()]
-        } else {
-            home_dirs
-                .iter()
-                .map(|h| h.path.join(".hermes"))
-                .filter(|p| p.exists())
-                .collect()
-        };
-        v.push(Box::new(hermes::HermesCollector::new_multi(hermes_dirs)));
-    }
-
-    v
+#[tauri::command]
+fn list_providers() -> Vec<(String, String)> {
+    providers::ALL.iter().map(|p| (p.key.to_string(), p.label.to_string())).collect()
 }
 
-/// Distinct WSL distros discovered across the resolved home directories —
-/// the set `App::tick` needs to poll each tick for WSL-sourced sessions'
-/// process liveness.
-fn wsl_distros(home_dirs: &[HomeDir]) -> Vec<String> {
-    let mut distros: Vec<String> = home_dirs
-        .iter()
-        .filter_map(|h| h.wsl_distro.clone())
-        .collect();
-    distros.sort();
-    distros.dedup();
-    distros
+#[tauri::command]
+fn set_enabled_agents(state: tauri::State<AppState>, agents: Vec<String>) {
+    let mut cfg = match state.config.lock() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    cfg.enabled_agents = agents;
+    let _ = config::save_config(&state.config_path, &cfg);
+    let new_collectors = providers::build_collectors(&cfg, &state.home_dirs);
+    if let Ok(mut app) = state.app.lock() {
+        app.set_collectors(new_collectors);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -229,17 +129,38 @@ pub fn run() {
         .join("ai-usage-overlay")
         .join("config.toml");
     let cfg = config::load_config(&config_path);
-    let home_dirs = resolve_home_dirs();
-    let collectors = build_collectors(&cfg, &home_dirs);
-    let distros = wsl_distros(&home_dirs);
+
+    let history_path = dirs::config_dir()
+        .unwrap_or_default()
+        .join("ai-usage-overlay")
+        .join("history.db");
+    let history_conn: Option<Mutex<rusqlite::Connection>> = if cfg.history_enabled {
+        history::open(&history_path).ok().map(Mutex::new)
+    } else {
+        None
+    };
+    if let Some(conn) = &history_conn {
+        if let Ok(guard) = conn.lock() {
+            let cutoff_ms = chrono::Utc::now().timestamp_millis()
+                - (cfg.history_retention_days as i64) * 86_400_000;
+            let _ = history::prune_older_than(&guard, cutoff_ms);
+        }
+    }
+
+    let home_dirs = home::resolve_home_dirs();
+    let collectors = providers::build_collectors(&cfg, &home_dirs);
+    let distros = home::wsl_distros(&home_dirs);
     let app_state = AppState {
         app: Mutex::new(app::App::new_with_wsl_distros(collectors, distros)),
         config: Mutex::new(cfg.clone()),
         config_path: config_path.clone(),
+        history_conn,
+        home_dirs: home_dirs.clone(),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -280,6 +201,8 @@ pub fn run() {
             // Initial opacity: applied as CSS by the frontend, not a native window API.
             if let Some(w) = app_handle.get_webview_window("overlay") {
                 let _ = w.emit("opacity://update", cfg.opacity);
+                let _ = w.emit("compact://update", cfg.compact_view);
+                let _ = w.emit("theme://update", (cfg.theme.clone(), cfg.accent_color.clone()));
             }
 
             // Global hotkey: Ctrl+Shift+Space toggles visibility
@@ -303,20 +226,85 @@ pub fn run() {
             // Tick thread
             let app_handle = app_handle.clone();
             std::thread::spawn(move || loop {
-                let interval = {
+                let (interval, stall_alert_secs) = {
                     let state: tauri::State<AppState> = app_handle.state();
-                    state
-                        .config
-                        .lock()
-                        .map(|c| c.poll_interval_ms)
-                        .unwrap_or(1000)
+                    let cfg = state.config.lock().unwrap();
+                    (cfg.poll_interval_ms, cfg.stall_alert_secs)
                 };
-                let snapshot = {
+                let mut snapshot = {
                     let state: tauri::State<AppState> = app_handle.state();
                     let mut a = state.app.lock().unwrap();
-                    a.tick()
+                    a.tick_with_threshold(stall_alert_secs, chrono::Utc::now().timestamp_millis())
                 };
+
+                static NOTIFIED: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+                let notified = NOTIFIED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+                if let Ok(mut notified) = notified.lock() {
+                    let stalled_keys: std::collections::HashSet<String> = snapshot
+                        .sessions
+                        .iter()
+                        .filter(|s| s.stalled)
+                        .map(|s| format!("{}:{}", s.agent_cli, s.session_id))
+                        .collect();
+                    for key in &stalled_keys {
+                        if notified.insert(key.clone()) {
+                            let _ = app_handle
+                                .notification()
+                                .builder()
+                                .title("AI assistant stalled")
+                                .body(format!("{key} has been thinking/executing longer than expected."))
+                                .show();
+                        }
+                    }
+                    notified.retain(|k| stalled_keys.contains(k));
+                }
+                {
+                    let state: tauri::State<AppState> = app_handle.state();
+                    if let Some(hconn) = &state.history_conn {
+                        if let Ok(guard) = hconn.lock() {
+                            let ts_ms = chrono::Utc::now().timestamp_millis();
+                            let since_ms = ts_ms - 3_600_000; // last hour of samples
+                            for (agent, rl) in snapshot.usage_limits.iter_mut() {
+                                let five_hour = history::rate_limit_history(&guard, agent, "five_hour", since_ms).unwrap_or_default();
+                                rl.five_hour_eta_ms = burn_rate::cap_at_reset(
+                                    burn_rate::project_time_to_limit(&five_hour, ts_ms),
+                                    rl.five_hour_resets_at,
+                                    ts_ms,
+                                );
+                                let seven_day = history::rate_limit_history(&guard, agent, "seven_day", since_ms).unwrap_or_default();
+                                rl.seven_day_eta_ms = burn_rate::cap_at_reset(
+                                    burn_rate::project_time_to_limit(&seven_day, ts_ms),
+                                    rl.seven_day_resets_at,
+                                    ts_ms,
+                                );
+                                let monthly = history::rate_limit_history(&guard, agent, "monthly", since_ms).unwrap_or_default();
+                                rl.monthly_eta_ms = burn_rate::cap_at_reset(
+                                    burn_rate::project_time_to_limit(&monthly, ts_ms),
+                                    rl.monthly_resets_at,
+                                    ts_ms,
+                                );
+                            }
+                        }
+                    }
+                }
                 let _ = app_handle.emit("snapshot://update", &snapshot);
+                {
+                    let state: tauri::State<AppState> = app_handle.state();
+                    if let Some(hconn) = &state.history_conn {
+                        if let Ok(guard) = hconn.lock() {
+                            let ts_ms = chrono::Utc::now().timestamp_millis();
+                            // Sample at most once per 60s regardless of poll_interval_ms —
+                            // a 1s poll interval would otherwise write 60x more rows than needed.
+                            static LAST_SAMPLE_MS: std::sync::atomic::AtomicI64 =
+                                std::sync::atomic::AtomicI64::new(0);
+                            let last = LAST_SAMPLE_MS.load(std::sync::atomic::Ordering::Relaxed);
+                            if ts_ms - last >= 60_000 {
+                                let _ = history::record_snapshot(&guard, ts_ms, &snapshot);
+                                LAST_SAMPLE_MS.store(ts_ms, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
                 std::thread::sleep(std::time::Duration::from_millis(interval.max(200)));
             });
 
@@ -326,7 +314,13 @@ pub fn run() {
             toggle_visibility,
             set_opacity,
             set_poll_interval,
-            quit
+            quit,
+            get_usage_history,
+            get_config,
+            list_providers,
+            set_enabled_agents,
+            set_compact_view,
+            set_theme
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
