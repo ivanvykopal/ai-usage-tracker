@@ -1,6 +1,6 @@
 # AI Assistant Usage Overlay
 
-A Windows desktop overlay (like NVIDIA's GPU overlay) showing live usage of Claude Code, Codex CLI, and Hermes: tokens, context-window %, status, memory. Transparent, always-on-top, draggable. Read-only — no API keys, no network.
+A Windows desktop overlay (like NVIDIA's GPU overlay) showing live usage of Claude Code, Codex CLI, and Hermes: tokens, context-window %, status, memory. Transparent, always-on-top, draggable. Read-only and local-first — no new API keys, and only one outbound network call (Claude's account-level usage, see below; opt-out available).
 
 ## Build Requirements
 
@@ -48,6 +48,7 @@ poll_interval_ms = 1000
 opacity = 0.85
 hotkey = "Ctrl+Shift+Space"
 enabled_agents = ["claude", "codex", "hermes"]
+claude_usage_enabled = true
 # hermes_data_dir = "C:/Users/you/AppData/Local/hermes"
 ```
 
@@ -59,16 +60,32 @@ enabled_agents = ["claude", "codex", "hermes"]
 
 ### 5-hour / weekly usage limits
 
-Codex reports its own 5h/weekly rate-limit usage inside its transcript, so it shows up automatically. Claude Code does not expose this in the transcript — to see it here, configure a Claude Code [StatusLine hook](https://docs.claude.com/en/docs/claude-code/statusline) that writes `~/.claude/abtop-rate-limits.json`:
+A usage-limit bar at the top of the panel always shows each provider's
+account-level 5h/weekly quota, independent of whether a session is currently
+running.
 
-```json
-{
-  "five_hour": { "used_percentage": 42.0, "resets_at": 1730000000 },
-  "seven_day": { "used_percentage": 18.5, "resets_at": 1730500000 }
-}
-```
-
-Without that file, the rate-limit row is simply omitted for Claude sessions.
+- **Codex** reports this in its own transcript, so it appears automatically
+  once you've used Codex at least once that day.
+- **Claude** usage is fetched directly from Anthropic's own usage API
+  (`api.anthropic.com/api/oauth/usage`), reusing the OAuth token Claude Code
+  already stores in `~/.claude/.credentials.json` after you log in — no new
+  credentials, no API key. **This is the one network call this app makes;**
+  everything else is fully local and read-only. It polls every 3 minutes and
+  only ever talks to Anthropic's own endpoint.
+  - To disable this and keep the app strictly network-free, set
+    `claude_usage_enabled = false` in `config.toml`. Claude's usage row will
+    then only populate if you separately configure a StatusLine hook to write
+    `~/.claude/abtop-rate-limits.json`:
+    ```json
+    {
+      "five_hour": { "used_percentage": 42.0, "resets_at": 1730000000 },
+      "seven_day": { "used_percentage": 18.5, "resets_at": 1730500000 }
+    }
+    ```
+  - If you're on Bedrock/Vertex/API-key auth (no OAuth token present), the
+    app automatically falls back to the hook file regardless of this setting.
+- A provider row is simply omitted until usage data has been obtained at
+  least once — no "N/A" placeholders.
 
 ## Key Bindings
 
