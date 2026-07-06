@@ -21,6 +21,10 @@ pub struct Config {
     pub history_enabled: bool,
     #[serde(default = "default_history_retention_days")]
     pub history_retention_days: u32,
+    /// Seconds a session may stay in `Thinking` or `Executing` before it's
+    /// flagged `stalled` and (once) notified about. `0` disables the feature.
+    #[serde(default = "default_stall_alert_secs")]
+    pub stall_alert_secs: u64,
 }
 
 fn default_claude_usage_enabled() -> bool {
@@ -35,6 +39,10 @@ fn default_history_retention_days() -> u32 {
     30
 }
 
+fn default_stall_alert_secs() -> u64 {
+    180
+}
+
 pub fn default_config() -> Config {
     Config {
         poll_interval_ms: 1000,
@@ -47,6 +55,7 @@ pub fn default_config() -> Config {
         claude_usage_enabled: true,
         history_enabled: true,
         history_retention_days: 30,
+        stall_alert_secs: 180,
     }
 }
 
