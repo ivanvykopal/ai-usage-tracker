@@ -16,6 +16,13 @@ hideBtn.addEventListener("click", () => {
 const compactBtn = document.getElementById("compact-btn");
 let compactView = false;
 
+// Chevron flips like an accordion: pointing down (▾) invites "expand",
+// pointing up (▴) invites "collapse".
+function updateCompactIcon() {
+  compactBtn.textContent = compactView ? "▾" : "▴";
+  compactBtn.title = compactView ? "Expand view" : "Compact view";
+}
+
 compactBtn.addEventListener("click", () => {
   compactView = !compactView;
   window.__TAURI__.core.invoke("set_compact_view", { compact: compactView });
@@ -24,6 +31,8 @@ compactBtn.addEventListener("click", () => {
 window.__TAURI__.event.listen("compact://update", (e) => {
   compactView = e.payload;
   panel.classList.toggle("compact", compactView);
+  updateCompactIcon();
+  if (!compactView) refreshHistory();
 });
 
 const settingsBtn = document.getElementById("settings-btn");
@@ -85,7 +94,7 @@ window.__TAURI__.event.listen("theme://update", (e) => {
 });
 
 function pushTheme() {
-  window.__TAURI__.core.invoke("set_theme", { theme: themeSelect.value, accent_color: accentInput.value });
+  window.__TAURI__.core.invoke("set_theme", { theme: themeSelect.value, accentColor: accentInput.value });
 }
 themeSelect.addEventListener("change", pushTheme);
 accentInput.addEventListener("input", pushTheme);
@@ -221,6 +230,12 @@ function renderUsageLimits(usageLimits) {
   const rows = agents.map(agent => {
     const rl = usageLimits[agent];
     const label = AGENT_LABEL[agent] || agent;
+    if (rl.loading) {
+      return `<div class="usage-row usage-row-loading">
+          <span class="usage-agent">${escapeHtml(label)}</span>
+          <span class="usage-loading">loading usage…</span>
+        </div>`;
+    }
     const windows = [
       renderUsageWindow("5h", rl.five_hour_pct, rl.five_hour_resets_at, rl.five_hour_eta_ms),
       renderUsageWindow("week", rl.seven_day_pct, rl.seven_day_resets_at, rl.seven_day_eta_ms),
@@ -242,15 +257,23 @@ window.__TAURI__.event.listen("snapshot://update", (e) => {
 
 const historyCanvas = document.getElementById("history-chart");
 const historyCtx = historyCanvas.getContext("2d");
+const historyValueEl = document.getElementById("history-value");
 
 function drawSparkline(points) {
   const w = historyCanvas.width = historyCanvas.clientWidth;
   const h = historyCanvas.height;
   historyCtx.clearRect(0, 0, w, h);
-  if (points.length < 2) return;
+  if (points.length < 2) {
+    historyValueEl.textContent = points.length === 1 ? fmt(points[0][1]) : "no data yet";
+    return;
+  }
   const values = points.map(p => p[1]);
   const min = Math.min(...values);
   const max = Math.max(...values, min + 1);
+  // The label shows the latest sample, not the min-max range — the line
+  // itself is the range, a bare number there just duplicated the chart
+  // without saying what it meant.
+  historyValueEl.textContent = fmt(values[values.length - 1]);
   historyCtx.strokeStyle = "#6aa0ff";
   historyCtx.lineWidth = 1.5;
   historyCtx.beginPath();
@@ -264,10 +287,12 @@ function drawSparkline(points) {
 }
 
 async function refreshHistory() {
+  if (compactView) return; // graph is hidden in compact view — skip the fetch
   try {
     const points = await window.__TAURI__.core.invoke("get_usage_history", { agent: "claude", hours: 6 });
     drawSparkline(points);
   } catch (e) {
+    historyValueEl.textContent = "unavailable";
     // history disabled or db unavailable — leave the canvas blank.
   }
 }

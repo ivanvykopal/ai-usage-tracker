@@ -65,6 +65,12 @@ pub struct RateLimitInfo {
     pub five_hour_eta_ms: Option<i64>,
     pub seven_day_eta_ms: Option<i64>,
     pub monthly_eta_ms: Option<i64>,
+    /// True when a live data source exists (e.g. Claude's usage-API poller)
+    /// but hasn't produced its first result yet, and there's no hook-file
+    /// fallback data either — lets the frontend show "loading" instead of
+    /// silently omitting the row until the first fetch completes.
+    #[serde(default)]
+    pub loading: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +100,10 @@ pub fn build_snapshot(
     by_status.insert(SessionStatus::Done, 0);
     by_status.insert(SessionStatus::Unknown, 0);
     for s in &sessions {
-        let t = s.total_input_tokens + s.total_output_tokens;
+        let t = s.total_input_tokens
+            + s.total_output_tokens
+            + s.total_cache_read
+            + s.total_cache_create;
         total_tokens += t;
         *by_agent_tokens.entry(s.agent_cli.clone()).or_insert(0) += t;
         *by_status.entry(s.status).or_insert(0) += 1;

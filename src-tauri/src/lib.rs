@@ -266,11 +266,23 @@ pub fn run() {
                             let since_ms = ts_ms - 3_600_000; // last hour of samples
                             for (agent, rl) in snapshot.usage_limits.iter_mut() {
                                 let five_hour = history::rate_limit_history(&guard, agent, "five_hour", since_ms).unwrap_or_default();
-                                rl.five_hour_eta_ms = burn_rate::project_time_to_limit(&five_hour, ts_ms);
+                                rl.five_hour_eta_ms = burn_rate::cap_at_reset(
+                                    burn_rate::project_time_to_limit(&five_hour, ts_ms),
+                                    rl.five_hour_resets_at,
+                                    ts_ms,
+                                );
                                 let seven_day = history::rate_limit_history(&guard, agent, "seven_day", since_ms).unwrap_or_default();
-                                rl.seven_day_eta_ms = burn_rate::project_time_to_limit(&seven_day, ts_ms);
+                                rl.seven_day_eta_ms = burn_rate::cap_at_reset(
+                                    burn_rate::project_time_to_limit(&seven_day, ts_ms),
+                                    rl.seven_day_resets_at,
+                                    ts_ms,
+                                );
                                 let monthly = history::rate_limit_history(&guard, agent, "monthly", since_ms).unwrap_or_default();
-                                rl.monthly_eta_ms = burn_rate::project_time_to_limit(&monthly, ts_ms);
+                                rl.monthly_eta_ms = burn_rate::cap_at_reset(
+                                    burn_rate::project_time_to_limit(&monthly, ts_ms),
+                                    rl.monthly_resets_at,
+                                    ts_ms,
+                                );
                             }
                         }
                     }

@@ -38,6 +38,22 @@ pub fn project_time_to_limit(points: &[(i64, f64)], now_ms: i64) -> Option<i64> 
     }
 }
 
+/// A rolling window resets its pct to ~0 at `resets_at` (epoch seconds), so
+/// no projected ETA past that point can ever be reached — the window is gone
+/// before usage would. Suppresses (returns `None`) any ETA that lands at or
+/// after the window's own reset, since it's not a real risk at the current
+/// burn rate.
+pub fn cap_at_reset(eta_ms: Option<i64>, resets_at: Option<u64>, now_ms: i64) -> Option<i64> {
+    let eta_ms = eta_ms?;
+    if let Some(resets_at) = resets_at {
+        let remaining_ms = resets_at as i64 * 1000 - now_ms;
+        if eta_ms >= remaining_ms {
+            return None;
+        }
+    }
+    Some(eta_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +90,32 @@ mod tests {
     fn already_at_limit_returns_zero() {
         let points = vec![(0, 90.0), (60_000, 100.0)];
         assert_eq!(project_time_to_limit(&points, 60_000), Some(0));
+    }
+
+    #[test]
+    fn eta_past_reset_is_suppressed() {
+        // A 5h window with 1h left can't be hit by a 6.5h-out projection.
+        let now_ms = 0;
+        let resets_at_secs = 3_600; // 1h from now
+        let eta_ms = 6 * 3_600_000 + 30 * 60_000; // 6h30m
+        assert_eq!(cap_at_reset(Some(eta_ms), Some(resets_at_secs), now_ms), None);
+    }
+
+    #[test]
+    fn eta_before_reset_passes_through() {
+        let now_ms = 0;
+        let resets_at_secs = 3_600 * 5; // 5h from now
+        let eta_ms = 3_600_000; // 1h
+        assert_eq!(cap_at_reset(Some(eta_ms), Some(resets_at_secs), now_ms), Some(eta_ms));
+    }
+
+    #[test]
+    fn no_resets_at_passes_through_unchanged() {
+        assert_eq!(cap_at_reset(Some(1_000), None, 0), Some(1_000));
+    }
+
+    #[test]
+    fn none_eta_stays_none() {
+        assert_eq!(cap_at_reset(None, Some(1), 0), None);
     }
 }

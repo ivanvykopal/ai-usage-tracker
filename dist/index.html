@@ -8,9 +8,11 @@
     <div id="panel">
       <div id="titlebar">
         <span>AI Usage Tracker</span>
-        <span id="settings-btn" title="Settings">&#9881;</span>
-        <button id="compact-btn" title="Toggle compact view">&#8942;</button>
-        <button id="hide-btn" title="Hide">_</button>
+        <div id="titlebar-actions">
+          <span id="settings-btn" title="Settings">&#9881;</span>
+          <button id="compact-btn" title="Compact view">&#9652;</button>
+          <button id="hide-btn" title="Hide">_</button>
+        </div>
       </div>
       <div id="settings" class="hidden">
         <div class="settings-row">
@@ -35,7 +37,18 @@
         </div>
       </div>
       <div id="usage-limits"></div>
-      <canvas id="history-chart" height="28"></canvas>
+      <div id="history-section">
+        <div id="history-label">
+          <span>Tokens</span>
+          <span id="history-value">&mdash;</span>
+        </div>
+        <canvas id="history-chart" height="28"></canvas>
+        <div id="history-axis">
+          <span>6h ago</span>
+          <span>3h ago</span>
+          <span>now</span>
+        </div>
+      </div>
       <div id="content"><div class="empty">Loading...</div></div>
     </div>
     <script src="/main.js"></script>

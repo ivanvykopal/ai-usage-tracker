@@ -40,9 +40,10 @@ body { -webkit-user-select: none; user-select: none; }
   font-weight: 600;
 }
 #titlebar:active { cursor: grabbing; }
-#settings-btn { background: transparent; border: none; color: var(--fg-muted); cursor: pointer; font-size: 13px; }
+#titlebar-actions { display: flex; align-items: center; gap: 12px; }
+#settings-btn { background: transparent; border: none; color: var(--fg-muted); cursor: pointer; font-size: 13px; padding: 2px; }
 #compact-btn, #hide-btn {
-  background: transparent; border: none; color: var(--fg-muted); cursor: pointer; font-size: 14px;
+  background: transparent; border: none; color: var(--fg-muted); cursor: pointer; font-size: 14px; padding: 2px;
 }
 #settings { padding: 6px 10px; border-bottom: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
 #settings.hidden { display: none; }
@@ -52,6 +53,7 @@ body { -webkit-user-select: none; user-select: none; }
 .compact .meta .task { font-size: 9px; }
 .compact .row { padding: 3px 0; }
 .compact .project-header { padding: 2px 0; }
+.compact #history-section { display: none; }
 #content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 10px; }
 .row { padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
 .head { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -82,14 +84,19 @@ body { -webkit-user-select: none; user-select: none; }
   gap: 3px;
 }
 #usage-limits:empty { display: none; }
-.usage-row { display: flex; align-items: center; gap: 10px; font-size: 10px; opacity: 0.85; }
+.usage-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; font-size: 10px; opacity: 0.85; }
 .usage-agent { font-weight: 600; flex-shrink: 0; width: 42px; }
-.usage-window { display: flex; align-items: center; gap: 4px; }
+.usage-window { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; flex-shrink: 0; }
 .usage-pct { opacity: 0.8; }
 .usage-bar { width: 40px; margin: 0; display: inline-block; }
 .usage-reset { opacity: 0.55; }
 .usage-eta { opacity: 0.6; color: #ffb454; }
-#history-chart { width: 100%; display: block; padding: 2px 10px; opacity: 0.8; }
+.usage-loading { opacity: 0.5; font-style: italic; }
+#history-section { padding: 2px 10px 4px; border-bottom: 1px solid var(--border-soft); }
+#history-label { display: flex; justify-content: space-between; font-size: 9px; opacity: 0.6; margin-bottom: 2px; }
+#history-value { font-weight: 600; opacity: 0.9; }
+#history-chart { width: 100%; display: block; opacity: 0.8; }
+#history-axis { display: flex; justify-content: space-between; font-size: 8px; opacity: 0.4; margin-top: 1px; }
 .cost { color: #8bd17c; }
 .row.stalled { background: rgba(255,80,80,0.12); border-left: 2px solid #ff5050; padding-left: 6px; }
 .project-group { margin-bottom: 4px; }

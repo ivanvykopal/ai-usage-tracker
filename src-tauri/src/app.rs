@@ -31,11 +31,31 @@ impl App {
         }
     }
 
-    /// Replaces the running set of collectors — used when the user toggles
-    /// which providers are enabled from the in-app settings panel, so a change
-    /// takes effect on the very next tick without an app restart.
-    pub fn set_collectors(&mut self, collectors: Vec<Box<dyn Collector>>) {
-        self.collectors = collectors;
+    /// Reconciles the running set of collectors against a freshly-built list
+    /// — used when the user toggles which providers are enabled from the
+    /// in-app settings panel, so a change takes effect on the very next tick
+    /// without an app restart. `new_collectors` is expected to contain a
+    /// fresh instance per currently-enabled provider (from
+    /// `providers::build_collectors`), but a provider whose enabled state
+    /// didn't change keeps its *existing* running instance instead of
+    /// swapping in the fresh one — a fresh `ClaudeCollector`, for example,
+    /// starts its usage-API poller over from an empty state, so blindly
+    /// replacing an unchanged collector would transiently blank its usage
+    /// data for no reason every time an unrelated provider is toggled.
+    pub fn set_collectors(&mut self, new_collectors: Vec<Box<dyn Collector>>) {
+        let mut old_by_name: HashMap<String, Box<dyn Collector>> = self
+            .collectors
+            .drain(..)
+            .map(|c| (c.name().to_string(), c))
+            .collect();
+        self.collectors = new_collectors
+            .into_iter()
+            .map(|new_c| {
+                old_by_name
+                    .remove(new_c.name())
+                    .unwrap_or(new_c)
+            })
+            .collect();
     }
 
     /// Refresh every collector against the current process state and return
@@ -188,6 +208,45 @@ mod tests {
         app.tick_with_threshold(60, 0);
         let second = app.tick_with_threshold(60, 61_000);
         assert!(!second.sessions[0].stalled, "status changed, so the timer should have reset");
+    }
+
+    #[test]
+    fn set_collectors_preserves_unchanged_collector_instances() {
+        // Mimics ClaudeCollector holding live state (e.g. a usage-API poller
+        // handle) that a same-named replacement wouldn't have yet — toggling
+        // an unrelated provider must not reset it.
+        struct StatefulCollector { tag: &'static str, hits: u32 }
+        impl Collector for StatefulCollector {
+            fn name(&self) -> &str { self.tag }
+            fn collect(&mut self, _ctx: &ProcessContext) -> Vec<AgentSession> {
+                self.hits += 1;
+                vec![AgentSession { session_id: self.hits.to_string(), agent_cli: self.tag.into(), ..blank_session() }]
+            }
+        }
+        let mut app = App::new(vec![Box::new(StatefulCollector { tag: "claude", hits: 5 })]);
+        // Simulate rebuilding collectors after toggling an unrelated provider:
+        // a brand-new "claude" instance with reset state is offered...
+        app.set_collectors(vec![Box::new(StatefulCollector { tag: "claude", hits: 0 })]);
+        // ...but the original, stateful instance should still be the one running.
+        let snapshot = app.tick();
+        assert_eq!(snapshot.sessions[0].session_id, "6", "expected the original collector's hit-count to continue, not reset to 1");
+    }
+
+    #[test]
+    fn set_collectors_drops_disabled_and_adds_newly_enabled() {
+        struct NamedCollector(&'static str);
+        impl Collector for NamedCollector {
+            fn name(&self) -> &str { self.0 }
+            fn collect(&mut self, _ctx: &ProcessContext) -> Vec<AgentSession> {
+                vec![AgentSession { session_id: self.0.into(), agent_cli: self.0.into(), ..blank_session() }]
+            }
+        }
+        let mut app = App::new(vec![Box::new(NamedCollector("claude")), Box::new(NamedCollector("codex"))]);
+        // codex gets disabled, hermes gets newly enabled, claude is unchanged.
+        app.set_collectors(vec![Box::new(NamedCollector("claude")), Box::new(NamedCollector("hermes"))]);
+        let snapshot = app.tick();
+        let names: std::collections::HashSet<_> = snapshot.sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(names, std::collections::HashSet::from(["claude", "hermes"]));
     }
 
     fn blank_session() -> AgentSession {

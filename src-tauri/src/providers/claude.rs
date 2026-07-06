@@ -247,6 +247,7 @@ impl Collector for ClaudeCollector {
     }
 
     fn usage_limits(&self) -> Option<crate::model::RateLimitInfo> {
+        let is_api_source = matches!(self.usage_source, ClaudeUsageSource::ApiHandle(_));
         if let ClaudeUsageSource::ApiHandle(handle) = &self.usage_source {
             if let Ok(guard) = handle.lock() {
                 if guard.is_some() {
@@ -257,9 +258,22 @@ impl Collector for ClaudeCollector {
         // Fall back to the hook file — either the API source has no data
         // yet (still starting up, or no OAuth token / Bedrock-Vertex auth),
         // or usage is configured to be hook-file-only.
-        self.config_dirs.iter().find_map(|entry| {
+        if let Some(rl) = self.config_dirs.iter().find_map(|entry| {
             rate_limit::read_rate_limit_file(&entry.dir.join(CLAUDE_RATE_FILE), "claude")
-        })
+        }) {
+            return Some(rl);
+        }
+        // The API poller exists and just hasn't completed its first fetch
+        // yet — surface a "loading" placeholder instead of omitting the row,
+        // so it doesn't look like Claude has no usage tracking at all.
+        if is_api_source {
+            return Some(crate::model::RateLimitInfo {
+                source: "claude".to_string(),
+                loading: true,
+                ..Default::default()
+            });
+        }
+        None
     }
 }
 
