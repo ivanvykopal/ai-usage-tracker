@@ -13,6 +13,19 @@ hideBtn.addEventListener("click", () => {
   window.__TAURI__.core.invoke("toggle_visibility");
 });
 
+const compactBtn = document.getElementById("compact-btn");
+let compactView = false;
+
+compactBtn.addEventListener("click", () => {
+  compactView = !compactView;
+  window.__TAURI__.core.invoke("set_compact_view", { compact: compactView });
+});
+
+window.__TAURI__.event.listen("compact://update", (e) => {
+  compactView = e.payload;
+  panel.classList.toggle("compact", compactView);
+});
+
 // Subscribe to snapshot updates
 const STATUS_LABEL = {
   waiting: "Waiting",

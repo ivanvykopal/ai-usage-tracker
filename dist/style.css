@@ -20,9 +20,13 @@ body { -webkit-user-select: none; user-select: none; }
   font-weight: 600;
 }
 #titlebar:active { cursor: grabbing; }
-#hide-btn {
+#compact-btn, #hide-btn {
   background: transparent; border: none; color: #aaa; cursor: pointer; font-size: 14px;
 }
+.compact .meta > span:not(.task) { display: none; }
+.compact .meta .task { font-size: 9px; }
+.compact .row { padding: 3px 0; }
+.compact .project-header { padding: 2px 0; }
 #content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 10px; }
 .row { padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .head { display: flex; align-items: center; gap: 6px; min-width: 0; }
