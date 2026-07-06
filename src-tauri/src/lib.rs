@@ -2,6 +2,7 @@ pub mod app;
 pub mod claude_usage;
 pub mod collector;
 pub mod config;
+pub mod history;
 pub mod home;
 pub mod model;
 pub mod process;
