@@ -18,6 +18,10 @@ pub struct CodexCollector {
     /// produced it is no longer "recent" (session ended) or is evicted from
     /// `state`. Cleared only by a fresh, differing value from a later tick.
     last_usage_limits: Option<RateLimitInfo>,
+    /// mtime of each stale rollout the last time it was opportunistically
+    /// scanned for usage limits, so an unchanged file isn't re-read and
+    /// re-parsed in full on every tick.
+    scanned_stale: HashMap<PathBuf, SystemTime>,
 }
 
 #[derive(Default, Clone)]
@@ -55,6 +59,7 @@ impl CodexCollector {
             readers: HashMap::new(),
             state: HashMap::new(),
             last_usage_limits: None,
+            scanned_stale: HashMap::new(),
         }
     }
 
@@ -65,6 +70,7 @@ impl CodexCollector {
             readers: HashMap::new(),
             state: HashMap::new(),
             last_usage_limits: None,
+            scanned_stale: HashMap::new(),
         }
     }
 
@@ -112,21 +118,31 @@ impl Collector for CodexCollector {
                 if !is_recent(&path, RECENT_AGE_SECS) {
                     // Not live, but still worth a one-off scan for its last
                     // known account-level usage — covers "app just launched,
-                    // no session started yet today."
-                    if let Ok(text) = fs::read_to_string(&path) {
-                        let mut scratch = CodexState::default();
-                        for line in text.lines() {
-                            apply_codex_line(line, &mut scratch);
-                        }
-                        if let Some(rl) = scratch.rate_limit {
-                            let is_newer = self
-                                .last_usage_limits
-                                .as_ref()
-                                .map(|cur| rl.updated_at.unwrap_or(0) > cur.updated_at.unwrap_or(0))
-                                .unwrap_or(true);
-                            if is_newer {
-                                self.last_usage_limits = Some(rl);
+                    // no session started yet today." Skip the full re-read if
+                    // the file's mtime hasn't changed since the last scan —
+                    // a stale rollout isn't being appended to, so a repeat
+                    // parse would just waste IO every tick.
+                    let mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+                    let already_scanned = mtime.is_some() && self.scanned_stale.get(&path) == mtime.as_ref();
+                    if !already_scanned {
+                        if let Ok(text) = fs::read_to_string(&path) {
+                            let mut scratch = CodexState::default();
+                            for line in text.lines() {
+                                apply_codex_line(line, &mut scratch);
                             }
+                            if let Some(rl) = scratch.rate_limit {
+                                let is_newer = self
+                                    .last_usage_limits
+                                    .as_ref()
+                                    .map(|cur| rl.updated_at.unwrap_or(0) > cur.updated_at.unwrap_or(0))
+                                    .unwrap_or(true);
+                                if is_newer {
+                                    self.last_usage_limits = Some(rl);
+                                }
+                            }
+                        }
+                        if let Some(m) = mtime {
+                            self.scanned_stale.insert(path.clone(), m);
                         }
                     }
                     continue;

@@ -33,6 +33,7 @@ fn collects_recent_codex_rollout_with_tokens_and_project() {
         procs: &procs,
         children: &kids,
         ports: &ports,
+        wsl: &HashMap::new(),
     };
 
     let mut c = CodexCollector::new(root.join("sessions"));
@@ -76,7 +77,7 @@ fn pending_function_call_marks_session_executing() {
     let procs = HashMap::new();
     let kids = HashMap::new();
     let ports = HashMap::new();
-    let ctx = ProcessContext { procs: &procs, children: &kids, ports: &ports };
+    let ctx = ProcessContext { procs: &procs, children: &kids, ports: &ports, wsl: &HashMap::new() };
     let mut c = CodexCollector::new(root.join("sessions"));
     let sessions = c.collect(&ctx);
     assert_eq!(sessions.len(), 1);
@@ -108,7 +109,7 @@ fn usage_limits_survive_after_rollout_goes_stale() {
     let procs = HashMap::new();
     let kids = HashMap::new();
     let ports = HashMap::new();
-    let ctx = ProcessContext { procs: &procs, children: &kids, ports: &ports };
+    let ctx = ProcessContext { procs: &procs, children: &kids, ports: &ports, wsl: &HashMap::new() };
     let mut c = CodexCollector::new(root.join("sessions"));
 
     // First tick: rollout is fresh, session present, usage limits populated.
@@ -160,7 +161,7 @@ fn usage_limits_populated_from_recent_rollout_even_when_not_treated_as_active_se
     let procs = HashMap::new();
     let kids = HashMap::new();
     let ports = HashMap::new();
-    let ctx = ProcessContext { procs: &procs, children: &kids, ports: &ports };
+    let ctx = ProcessContext { procs: &procs, children: &kids, ports: &ports, wsl: &HashMap::new() };
     let mut c = CodexCollector::new(root.join("sessions"));
 
     let sessions = c.collect(&ctx);

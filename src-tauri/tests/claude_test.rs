@@ -33,10 +33,13 @@ fn empty_ctx() -> ProcessContext<'static> {
     let procs = EMPTY_PROCS.get_or_init(HashMap::new);
     let kids = EMPTY_KIDS.get_or_init(HashMap::new);
     let ports = EMPTY_PORTS.get_or_init(HashMap::new);
+    static EMPTY_WSL: OnceLock<HashMap<String, usage_tracker::process::ProcessSnapshot>> = OnceLock::new();
+    let wsl = EMPTY_WSL.get_or_init(HashMap::new);
     ProcessContext {
         procs,
         children: kids,
         ports,
+        wsl,
     }
 }
 
@@ -67,6 +70,7 @@ fn collects_session_with_accumulated_tokens_and_project_name() {
         procs: &procs,
         children: &kids,
         ports: &ports,
+        wsl: &HashMap::new(),
     };
 
     let mut c = ClaudeCollector::new(root);
@@ -108,6 +112,7 @@ fn synthetic_user_messages_do_not_pin_thinking_status() {
         procs: &procs,
         children: &kids,
         ports: &ports,
+        wsl: &HashMap::new(),
     };
 
     let mut c = ClaudeCollector::new(root);
@@ -143,7 +148,7 @@ fn falls_back_to_hook_file_when_api_poller_has_no_data() {
         4242,
         ProcInfo { pid: 4242, command: "claude".into(), rss_kb: 50_000, cpu: 0.0, parent_pid: None },
     );
-    let ctx = ProcessContext { procs: &procs, children: &HashMap::new(), ports: &HashMap::new() };
+    let ctx = ProcessContext { procs: &procs, children: &HashMap::new(), ports: &HashMap::new(), wsl: &HashMap::new() };
 
     let usage_source = ClaudeUsageSource::ApiHandle(std::sync::Arc::new(std::sync::Mutex::new(None)));
     let mut c = usage_tracker::claude::ClaudeCollector::new_multi_with_usage(
@@ -168,7 +173,7 @@ fn prefers_api_handle_data_over_hook_file() {
         4242,
         ProcInfo { pid: 4242, command: "claude".into(), rss_kb: 50_000, cpu: 0.0, parent_pid: None },
     );
-    let ctx = ProcessContext { procs: &procs, children: &HashMap::new(), ports: &HashMap::new() };
+    let ctx = ProcessContext { procs: &procs, children: &HashMap::new(), ports: &HashMap::new(), wsl: &HashMap::new() };
 
     let api_value = RateLimitInfo {
         source: "claude".into(),
