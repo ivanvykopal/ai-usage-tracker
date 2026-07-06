@@ -46,7 +46,7 @@ pub fn resolve_home_dirs() -> Vec<HomeDir> {
                 });
             }
         }
-    } else {
+    } else if cfg!(target_os = "windows") {
         // We're on native Windows - check for WSL home directories
         // Try to discover WSL distributions and their users
         if let Ok(output) = process::silent_command("wsl")
