@@ -60,7 +60,7 @@ function renderSnapshot(s) {
       ? `<span>&#931;${fmt(usage)} / ${fmtDuration(elapsedMs)}</span><span>${fmt(rate)} tok/min</span>`
       : `<span>&#931;${fmt(usage)}</span>`;
     return `
-      <div class="row">
+      <div class="row${sess.stalled ? " stalled" : ""}">
         <div class="head">
           <span class="dot dot-${sess.agent_cli}"></span>
           <span class="agent">${sess.agent_cli}</span>

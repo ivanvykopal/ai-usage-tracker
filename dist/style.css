@@ -63,3 +63,4 @@ body { -webkit-user-select: none; user-select: none; }
 .usage-eta { opacity: 0.6; color: #ffb454; }
 #history-chart { width: 100%; display: block; padding: 2px 10px; opacity: 0.8; }
 .cost { color: #8bd17c; }
+.row.stalled { background: rgba(255,80,80,0.12); border-left: 2px solid #ff5050; padding-left: 6px; }
