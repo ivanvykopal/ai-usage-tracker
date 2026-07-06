@@ -185,11 +185,31 @@ pub fn run() {
                         .map(|c| c.poll_interval_ms)
                         .unwrap_or(1000)
                 };
-                let snapshot = {
+                let mut snapshot = {
                     let state: tauri::State<AppState> = app_handle.state();
                     let mut a = state.app.lock().unwrap();
                     a.tick()
                 };
+                {
+                    let state: tauri::State<AppState> = app_handle.state();
+                    if let Some(hconn) = &state.history_conn {
+                        if let Ok(guard) = hconn.lock() {
+                            let ts_ms = chrono::Utc::now().timestamp_millis();
+                            let since_ms = ts_ms - 3_600_000; // last hour of samples
+                            for (agent, rl) in snapshot.usage_limits.iter_mut() {
+                                for (window, setter): (&str, fn(&mut crate::model::RateLimitInfo, Option<i64>)) in [
+                                    ("five_hour", |rl, v| rl.five_hour_eta_ms = v),
+                                    ("seven_day", |rl, v| rl.seven_day_eta_ms = v),
+                                    ("monthly", |rl, v| rl.monthly_eta_ms = v),
+                                ] {
+                                    let points = history::rate_limit_history(&guard, agent, window, since_ms).unwrap_or_default();
+                                    let eta = burn_rate::project_time_to_limit(&points, ts_ms);
+                                    setter(rl, eta);
+                                }
+                            }
+                        }
+                    }
+                }
                 let _ = app_handle.emit("snapshot://update", &snapshot);
                 {
                     let state: tauri::State<AppState> = app_handle.state();

@@ -53,6 +53,13 @@ pub struct RateLimitInfo {
     pub monthly_pct: Option<f64>,
     pub monthly_resets_at: Option<u64>,
     pub updated_at: Option<u64>,
+    /// Estimated milliseconds until this window hits 100%, from
+    /// `burn_rate::project_time_to_limit` over the last hour of samples in
+    /// `history.db`. `None` when history is disabled, there's not enough data
+    /// yet, or usage isn't trending upward.
+    pub five_hour_eta_ms: Option<i64>,
+    pub seven_day_eta_ms: Option<i64>,
+    pub monthly_eta_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
