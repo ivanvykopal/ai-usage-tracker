@@ -77,6 +77,7 @@ pub fn parse_usage_response(body: &str) -> Option<RateLimitInfo> {
             .and_then(|b| b.resets_at.as_deref())
             .and_then(parse_resets_at),
         monthly_pct: None,
+        ..Default::default()
         monthly_resets_at: None,
         updated_at: Some(now),
     })

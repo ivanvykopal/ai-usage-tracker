@@ -265,15 +265,12 @@ pub fn run() {
                             let ts_ms = chrono::Utc::now().timestamp_millis();
                             let since_ms = ts_ms - 3_600_000; // last hour of samples
                             for (agent, rl) in snapshot.usage_limits.iter_mut() {
-                                for (window, setter): (&str, fn(&mut crate::model::RateLimitInfo, Option<i64>)) in [
-                                    ("five_hour", |rl, v| rl.five_hour_eta_ms = v),
-                                    ("seven_day", |rl, v| rl.seven_day_eta_ms = v),
-                                    ("monthly", |rl, v| rl.monthly_eta_ms = v),
-                                ] {
-                                    let points = history::rate_limit_history(&guard, agent, window, since_ms).unwrap_or_default();
-                                    let eta = burn_rate::project_time_to_limit(&points, ts_ms);
-                                    setter(rl, eta);
-                                }
+                                let five_hour = history::rate_limit_history(&guard, agent, "five_hour", since_ms).unwrap_or_default();
+                                rl.five_hour_eta_ms = burn_rate::project_time_to_limit(&five_hour, ts_ms);
+                                let seven_day = history::rate_limit_history(&guard, agent, "seven_day", since_ms).unwrap_or_default();
+                                rl.seven_day_eta_ms = burn_rate::project_time_to_limit(&seven_day, ts_ms);
+                                let monthly = history::rate_limit_history(&guard, agent, "monthly", since_ms).unwrap_or_default();
+                                rl.monthly_eta_ms = burn_rate::project_time_to_limit(&monthly, ts_ms);
                             }
                         }
                     }

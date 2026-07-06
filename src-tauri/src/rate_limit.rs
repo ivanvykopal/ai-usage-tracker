@@ -54,5 +54,6 @@ pub fn read_rate_limit_file(path: &Path, default_source: &str) -> Option<RateLim
         monthly_pct: None,
         monthly_resets_at: None,
         updated_at: file.updated_at,
+        ..Default::default()
     })
 }

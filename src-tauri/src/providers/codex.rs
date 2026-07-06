@@ -471,7 +471,7 @@ fn is_recent(path: &Path, max_age_secs: u64) -> bool {
     age.as_secs() <= max_age_secs
 }
 
-pub fn build(cfg: &Config, home_dirs: &[HomeDir]) -> Option<Box<dyn Collector>> {
+pub fn build(_cfg: &Config, home_dirs: &[HomeDir]) -> Option<Box<dyn Collector>> {
     let codex_dirs: Vec<std::path::PathBuf> = home_dirs
         .iter()
         .map(|h| h.path.join(".codex").join("sessions"))
