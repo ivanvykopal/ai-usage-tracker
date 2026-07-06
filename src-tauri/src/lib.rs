@@ -8,6 +8,7 @@ pub mod hermes;
 pub mod home;
 pub mod model;
 pub mod process;
+pub mod providers;
 pub mod rate_limit;
 pub mod transcript;
 
