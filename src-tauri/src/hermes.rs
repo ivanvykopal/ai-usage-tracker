@@ -108,7 +108,6 @@ impl Collector for HermesCollector {
                 turn_count: active.message_count,
                 current_task: self.current_task.clone(),
                 mem_mb: 0,
-                rate_limit: None, // Hermes's API doc doesn't define 5h/weekly windows.
             });
         }
 

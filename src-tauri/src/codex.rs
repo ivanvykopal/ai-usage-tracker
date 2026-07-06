@@ -160,7 +160,6 @@ impl Collector for CodexCollector {
                     turn_count: 0,
                     current_task: st.current_task.clone(),
                     mem_mb: 0,
-                    rate_limit: st.rate_limit.clone(),
                 });
             }
         }

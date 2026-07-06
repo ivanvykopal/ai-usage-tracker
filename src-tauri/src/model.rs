@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -29,15 +29,13 @@ pub struct AgentSession {
     pub turn_count: u32,
     pub current_task: String,
     pub mem_mb: u64,
-    /// 5-hour / weekly (7-day) usage-limit windows, when available. `None`
-    /// when the agent doesn't report rate limits or none have been seen yet.
-    pub rate_limit: Option<RateLimitInfo>,
 }
 
 /// Account-level usage-limit windows, ported from abtop's `RateLimitInfo`.
-/// For Claude this comes from an externally-written status file (Claude
-/// Code itself doesn't expose it in the transcript); for Codex it's parsed
-/// live from `token_count` events.
+/// Account-level (not session-level), so these live on `Snapshot.usage_limits`
+/// rather than on individual sessions. For Claude this comes from Anthropic's
+/// usage API (with a hook-file fallback); for Codex it's parsed live from
+/// `token_count` events.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RateLimitInfo {
     pub source: String,
@@ -54,9 +52,13 @@ pub struct Snapshot {
     pub total_tokens: u64,
     pub by_agent_tokens: HashMap<String, u64>,
     pub by_status: HashMap<SessionStatus, u32>,
+    pub usage_limits: BTreeMap<String, RateLimitInfo>,
 }
 
-pub fn build_snapshot(sessions: Vec<AgentSession>) -> Snapshot {
+pub fn build_snapshot(
+    sessions: Vec<AgentSession>,
+    usage_limits: BTreeMap<String, RateLimitInfo>,
+) -> Snapshot {
     let mut total_tokens: u64 = 0;
     let mut by_agent_tokens: HashMap<String, u64> = HashMap::new();
     let mut by_status: HashMap<SessionStatus, u32> = HashMap::new();
@@ -77,5 +79,6 @@ pub fn build_snapshot(sessions: Vec<AgentSession>) -> Snapshot {
         total_tokens,
         by_agent_tokens,
         by_status,
+        usage_limits,
     }
 }

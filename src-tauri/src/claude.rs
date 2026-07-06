@@ -1,7 +1,6 @@
 use crate::collector::{Collector, ProcessContext};
 use crate::model::{AgentSession, SessionStatus};
 use crate::process::has_active_descendant;
-use crate::rate_limit::{self, CLAUDE_RATE_FILE};
 use crate::transcript::IncrementalReader;
 use serde::Deserialize;
 use serde_json::Value;
@@ -129,9 +128,6 @@ impl Collector for ClaudeCollector {
             let config_dir = &entry.dir;
             let (procs, children) = ctx.procs_for(entry.wsl_distro.as_deref());
             let sessions_dir = config_dir.join("sessions");
-            // Account-level, so read once and share across every Claude session this tick.
-            let rate_limit =
-                rate_limit::read_rate_limit_file(&config_dir.join(CLAUDE_RATE_FILE), "claude");
 
             let entries = match fs::read_dir(&sessions_dir) {
                 Ok(e) => e,
@@ -211,7 +207,6 @@ impl Collector for ClaudeCollector {
                     turn_count: 0,
                     current_task: st.current_task.clone(),
                     mem_mb,
-                    rate_limit: rate_limit.clone(),
                 });
             }
         }
