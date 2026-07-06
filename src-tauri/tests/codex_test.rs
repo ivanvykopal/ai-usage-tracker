@@ -171,3 +171,40 @@ fn usage_limits_populated_from_recent_rollout_even_when_not_treated_as_active_se
         .expect("usage limits should be seeded from the day's most recent rollout even without a live session");
     assert_eq!(rl.five_hour_pct, Some(33.0));
 }
+
+#[test]
+fn monthly_only_rate_limit_is_not_misclassified_as_weekly() {
+    // Codex's free plan reports a single ~30-day window as `primary` with no
+    // `secondary` at all — this must land in `monthly_pct`, not `seven_day_pct`.
+    let root = std::env::temp_dir().join(format!("utt-codex-monthly-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let now = Local::now();
+    let day_dir = root
+        .join("sessions")
+        .join(now.format("%Y").to_string())
+        .join(now.format("%m").to_string())
+        .join(now.format("%d").to_string());
+    fs::create_dir_all(&day_dir).unwrap();
+    fs::write(
+        day_dir.join("rollout-codex-5.jsonl"),
+        concat!(
+            "{\"type\":\"session_meta\",\"session_id\":\"codex-5\",\"cwd\":\"/webapp\",\"model\":\"gpt-5-codex\"}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"output_tokens\":10,\"cached_input_tokens\":0},\"last_token_usage\":{\"input_tokens\":100},\"model_context_window\":400000},\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":38.0,\"window_minutes\":43200,\"resets_at\":1783509651},\"secondary\":null}}}\n",
+        ),
+    )
+    .unwrap();
+
+    let procs = HashMap::new();
+    let kids = HashMap::new();
+    let ports = HashMap::new();
+    let ctx = ProcessContext { procs: &procs, children: &kids, ports: &ports, wsl: &HashMap::new() };
+    let mut c = CodexCollector::new(root.join("sessions"));
+
+    let sessions = c.collect(&ctx);
+    assert_eq!(sessions.len(), 1);
+    let rl = c.usage_limits().expect("usage limits should be populated");
+    assert_eq!(rl.monthly_pct, Some(38.0));
+    assert_eq!(rl.monthly_resets_at, Some(1783509651));
+    assert_eq!(rl.five_hour_pct, None, "monthly window must not be misclassified as five_hour");
+    assert_eq!(rl.seven_day_pct, None, "monthly window must not be misclassified as seven_day");
+}

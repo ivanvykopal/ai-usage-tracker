@@ -43,6 +43,11 @@ pub struct RateLimitInfo {
     pub five_hour_resets_at: Option<u64>,
     pub seven_day_pct: Option<f64>,
     pub seven_day_resets_at: Option<u64>,
+    /// Monthly quota window. Codex's free plan reports only this window
+    /// (`window_minutes` ~43200 / 30 days, no five-hour or weekly window at
+    /// all) — paid plans may report five-hour/weekly instead or as well.
+    pub monthly_pct: Option<f64>,
+    pub monthly_resets_at: Option<u64>,
     pub updated_at: Option<u64>,
 }
 

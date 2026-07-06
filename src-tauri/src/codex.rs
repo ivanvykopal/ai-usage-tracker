@@ -332,12 +332,20 @@ fn apply_codex_line(line: &str, st: &mut CodexState) {
                             let mins = w["window_minutes"].as_u64().unwrap_or(0);
                             let pct = w["used_percent"].as_f64();
                             let resets = w["resets_at"].as_u64();
-                            if mins <= 300 {
+                            // Codex doesn't always report a 5h+weekly pair —
+                            // the free plan reports only a single ~30-day
+                            // ("monthly") window as `primary` with no
+                            // `secondary` at all. Bucket by actual duration
+                            // rather than assuming primary=5h/secondary=week.
+                            if mins <= 6 * 60 {
                                 info.five_hour_pct = pct;
                                 info.five_hour_resets_at = resets;
-                            } else {
+                            } else if mins <= 8 * 24 * 60 {
                                 info.seven_day_pct = pct;
                                 info.seven_day_resets_at = resets;
+                            } else {
+                                info.monthly_pct = pct;
+                                info.monthly_resets_at = resets;
                             }
                         }
                         st.rate_limit = Some(info);

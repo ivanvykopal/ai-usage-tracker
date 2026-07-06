@@ -51,6 +51,8 @@ pub fn read_rate_limit_file(path: &Path, default_source: &str) -> Option<RateLim
         five_hour_resets_at: file.five_hour.as_ref().map(|w| w.resets_at),
         seven_day_pct: file.seven_day.as_ref().map(|w| w.used_percentage),
         seven_day_resets_at: file.seven_day.as_ref().map(|w| w.resets_at),
+        monthly_pct: None,
+        monthly_resets_at: None,
         updated_at: file.updated_at,
     })
 }

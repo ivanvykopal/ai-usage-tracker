@@ -103,7 +103,11 @@ function fmtCountdown(resetsAtSecs) {
 }
 
 function renderUsageWindow(label, pct, resetsAt) {
-  if (pct == null) return `<span>${label} —</span>`;
+  // A provider only reports the windows its plan actually has (e.g. Codex's
+  // free plan reports only "month", no five-hour/weekly at all) — omit
+  // entirely rather than showing a "label —" placeholder for windows that
+  // were never reported.
+  if (pct == null) return "";
   const clamped = Math.min(100, Math.max(0, Math.round(pct)));
   const countdown = fmtCountdown(resetsAt);
   return `<span class="usage-window">
@@ -119,10 +123,15 @@ function renderUsageLimits(usageLimits) {
   const rows = agents.map(agent => {
     const rl = usageLimits[agent];
     const label = AGENT_LABEL[agent] || agent;
+    const windows = [
+      renderUsageWindow("5h", rl.five_hour_pct, rl.five_hour_resets_at),
+      renderUsageWindow("week", rl.seven_day_pct, rl.seven_day_resets_at),
+      renderUsageWindow("month", rl.monthly_pct, rl.monthly_resets_at),
+    ].filter(Boolean).join("");
+    if (!windows) return "";
     return `<div class="usage-row">
         <span class="usage-agent">${escapeHtml(label)}</span>
-        ${renderUsageWindow("5h", rl.five_hour_pct, rl.five_hour_resets_at)}
-        ${renderUsageWindow("week", rl.seven_day_pct, rl.seven_day_resets_at)}
+        ${windows}
       </div>`;
   }).join("");
   return rows;

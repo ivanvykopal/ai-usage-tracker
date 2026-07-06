@@ -58,14 +58,18 @@ claude_usage_enabled = true
 - **Codex CLI**: Reads today's rollouts from `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, including live 5h/weekly rate-limit windows from `token_count` events
 - **Hermes**: Placeholder — needs data format specification
 
-### 5-hour / weekly usage limits
+### 5-hour / weekly / monthly usage limits
 
 A usage-limit bar at the top of the panel always shows each provider's
-account-level 5h/weekly quota, independent of whether a session is currently
-running.
+account-level quota usage, independent of whether a session is currently
+running. Only the windows a provider actually reports are shown — e.g. a
+Codex free-plan account only has a monthly window, so only "month" appears
+for it; a plan with 5h/weekly windows shows those instead.
 
 - **Codex** reports this in its own transcript, so it appears automatically
-  once you've used Codex at least once that day.
+  once you've used Codex at least once that day. Which window(s) show up
+  (5h, weekly, monthly) depends on your plan — the free plan reports only a
+  single ~30-day "monthly" window.
 - **Claude** usage is fetched directly from Anthropic's own usage API
   (`api.anthropic.com/api/oauth/usage`), reusing the OAuth token Claude Code
   already stores in `~/.claude/.credentials.json` after you log in — no new

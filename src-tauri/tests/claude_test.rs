@@ -181,6 +181,8 @@ fn prefers_api_handle_data_over_hook_file() {
         five_hour_resets_at: Some(1),
         seven_day_pct: None,
         seven_day_resets_at: None,
+        monthly_pct: None,
+        monthly_resets_at: None,
         updated_at: Some(1),
     };
     let usage_source = ClaudeUsageSource::ApiHandle(std::sync::Arc::new(std::sync::Mutex::new(Some(api_value))));
