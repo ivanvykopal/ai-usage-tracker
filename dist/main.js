@@ -74,15 +74,17 @@ function renderSnapshot(s) {
           <span>&#8593;${fmt(sess.total_output_tokens || 0)}</span>
           ${usageRow}
           <span>ctx ${bar}%</span>
+          ${sess.cost_usd != null ? `<span class="cost">$${sess.cost_usd.toFixed(3)}</span>` : ""}
           <span>${sess.mem_mb || 0}MB</span>
           <span class="task">${escapeHtml(sess.current_task || "")}</span>
         </div>
       </div>`;
   }).join("");
   const totalTokens = s.total_tokens || 0;
+  const totalCost = s.total_cost_usd || 0;
   const liveCount = s.sessions.length;
   return `<div class="rows">${rows}</div>
-          <div class="footer">total ${fmt(totalTokens)} tok &#183; ${liveCount} live</div>`;
+          <div class="footer">total ${fmt(totalTokens)} tok &#183; $${totalCost.toFixed(2)} &#183; ${liveCount} live</div>`;
 }
 
 const AGENT_LABEL = { claude: "Claude", codex: "Codex", hermes: "Hermes" };
