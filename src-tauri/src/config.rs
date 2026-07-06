@@ -17,10 +17,22 @@ pub struct Config {
     /// via the `abtop-rate-limits.json` hook file, if configured.
     #[serde(default = "default_claude_usage_enabled")]
     pub claude_usage_enabled: bool,
+    #[serde(default = "default_history_enabled")]
+    pub history_enabled: bool,
+    #[serde(default = "default_history_retention_days")]
+    pub history_retention_days: u32,
 }
 
 fn default_claude_usage_enabled() -> bool {
     true
+}
+
+fn default_history_enabled() -> bool {
+    true
+}
+
+fn default_history_retention_days() -> u32 {
+    30
 }
 
 pub fn default_config() -> Config {
@@ -33,6 +45,8 @@ pub fn default_config() -> Config {
         enabled_agents: vec!["claude".into(), "codex".into(), "hermes".into()],
         hermes_data_dir: None,
         claude_usage_enabled: true,
+        history_enabled: true,
+        history_retention_days: 30,
     }
 }
 

@@ -21,6 +21,7 @@ struct AppState {
     app: Mutex<app::App>,
     config: Mutex<config::Config>,
     config_path: PathBuf,
+    history_conn: Option<Mutex<rusqlite::Connection>>,
 }
 
 #[tauri::command]
@@ -65,6 +66,24 @@ pub fn run() {
         .join("ai-usage-overlay")
         .join("config.toml");
     let cfg = config::load_config(&config_path);
+
+    let history_path = dirs::config_dir()
+        .unwrap_or_default()
+        .join("ai-usage-overlay")
+        .join("history.db");
+    let history_conn: Option<Mutex<rusqlite::Connection>> = if cfg.history_enabled {
+        history::open(&history_path).ok().map(Mutex::new)
+    } else {
+        None
+    };
+    if let Some(conn) = &history_conn {
+        if let Ok(guard) = conn.lock() {
+            let cutoff_ms = chrono::Utc::now().timestamp_millis()
+                - (cfg.history_retention_days as i64) * 86_400_000;
+            let _ = history::prune_older_than(&guard, cutoff_ms);
+        }
+    }
+
     let home_dirs = home::resolve_home_dirs();
     let collectors = providers::build_collectors(&cfg, &home_dirs);
     let distros = home::wsl_distros(&home_dirs);
@@ -72,6 +91,7 @@ pub fn run() {
         app: Mutex::new(app::App::new_with_wsl_distros(collectors, distros)),
         config: Mutex::new(cfg.clone()),
         config_path: config_path.clone(),
+        history_conn,
     };
 
     tauri::Builder::default()
@@ -153,6 +173,23 @@ pub fn run() {
                     a.tick()
                 };
                 let _ = app_handle.emit("snapshot://update", &snapshot);
+                {
+                    let state: tauri::State<AppState> = app_handle.state();
+                    if let Some(hconn) = &state.history_conn {
+                        if let Ok(guard) = hconn.lock() {
+                            let ts_ms = chrono::Utc::now().timestamp_millis();
+                            // Sample at most once per 60s regardless of poll_interval_ms —
+                            // a 1s poll interval would otherwise write 60x more rows than needed.
+                            static LAST_SAMPLE_MS: std::sync::atomic::AtomicI64 =
+                                std::sync::atomic::AtomicI64::new(0);
+                            let last = LAST_SAMPLE_MS.load(std::sync::atomic::Ordering::Relaxed);
+                            if ts_ms - last >= 60_000 {
+                                let _ = history::record_snapshot(&guard, ts_ms, &snapshot);
+                                LAST_SAMPLE_MS.store(ts_ms, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
                 std::thread::sleep(std::time::Duration::from_millis(interval.max(200)));
             });
 
