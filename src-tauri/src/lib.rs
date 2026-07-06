@@ -59,6 +59,22 @@ fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn get_usage_history(state: tauri::State<AppState>, agent: String, hours: u32) -> Vec<(i64, u64)> {
+    let Some(hconn) = &state.history_conn else {
+        return Vec::new();
+    };
+    let Ok(guard) = hconn.lock() else {
+        return Vec::new();
+    };
+    let since_ms = chrono::Utc::now().timestamp_millis() - (hours as i64) * 3_600_000;
+    history::token_history(&guard, &agent, since_ms)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| (p.ts_ms, p.tokens))
+        .collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config_path = dirs::config_dir()
@@ -199,7 +215,8 @@ pub fn run() {
             toggle_visibility,
             set_opacity,
             set_poll_interval,
-            quit
+            quit,
+            get_usage_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
