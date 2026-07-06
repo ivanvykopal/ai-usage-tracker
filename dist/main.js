@@ -85,7 +85,7 @@ window.__TAURI__.event.listen("theme://update", (e) => {
 });
 
 function pushTheme() {
-  window.__TAURI__.core.invoke("set_theme", { theme: themeSelect.value, accentColor: accentInput.value });
+  window.__TAURI__.core.invoke("set_theme", { theme: themeSelect.value, accent_color: accentInput.value });
 }
 themeSelect.addEventListener("change", pushTheme);
 accentInput.addEventListener("input", pushTheme);
